@@ -95,25 +95,32 @@ describe("mocks cumplen los esquemas", () => {
     for (const a of repeated) {
       const prior = findCoveringApply(a, events)!
       expect(prior, `alerta #${a.id}`).toBeDefined()
-      expect(prior.site_id).toBe(a.site_id)
-      expect(prior.source_ip).toBe(a.source_ip)
+      expect(prior.source_ip).toBe(a.source_ip) // la regla de iptables es por IP
       expect(Date.parse(prior.occurred_at)).toBeLessThanOrEqual(Date.parse(a.occurred_at))
       const reversion = events.find((e) => e.original_event_id === prior.id)
       if (reversion) expect(Date.parse(a.occurred_at)).toBeLessThan(Date.parse(reversion.occurred_at))
       // la repetición no generó ningún evento propio
-      expect(events.some((e) => e.site_id === a.site_id && e.source_ip === a.source_ip && e.occurred_at === a.occurred_at)).toBe(false)
+      expect(events.some((e) => e.source_ip === a.source_ip && e.occurred_at === a.occurred_at)).toBe(false)
+      expect(deriveAlertState(a, [], events)).toBe(prior.site_id === a.site_id ? "blocked_prior_quarantine" : "blocked_other_site")
     }
+  })
+
+  it("hay repeticiones del mismo sitio y de otro sitio", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const states = mockAlerts().map((a) => deriveAlertState(a, [], events))
+    expect(states).toContain("blocked_prior_quarantine")
+    expect(states).toContain("blocked_other_site")
   })
 
   it("una repetición de una cuarentena activa se muestra como bloqueada y sin botón Revertir", () => {
     const events = mockMitigationEvents({ limit: 1000 })
     const quarantines = mockQuarantines()
     const repeated = mockAlerts().filter((a) => a.mitigation_applied && findOwnApply(a, events) === undefined)
-    const inActive = repeated.filter((a) => quarantines.some((q) => q.site_id === a.site_id && q.source_ip === a.source_ip))
+    const inActive = repeated.filter((a) => quarantines.some((q) => q.source_ip === a.source_ip))
     expect(inActive.length).toBeGreaterThan(0)
     for (const a of inActive) {
       expect(hasActiveQuarantine(a, quarantines)).toBe(false)
-      expect(deriveAlertState(a, quarantines, events)).toBe("blocked_prior_quarantine")
+      expect(["blocked_prior_quarantine", "blocked_other_site"]).toContain(deriveAlertState(a, quarantines, events))
     }
     // y la alerta que originó cada cuarentena sigue siendo la única con botón
     for (const q of quarantines) {
@@ -122,14 +129,25 @@ describe("mocks cumplen los esquemas", () => {
     }
   })
 
-  it("nunca hay dos APPLY solapados para la misma IP y sitio", () => {
+  it("una cuarentena activa de otro sitio bloquea la alerta sin botón Revertir en ese sitio", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const quarantines = mockQuarantines()
+    const crossSite = mockAlerts().filter((a) => {
+      if (!a.mitigation_applied || findOwnApply(a, events)) return false
+      return quarantines.some((q) => q.source_ip === a.source_ip && q.site_id !== a.site_id) && deriveAlertState(a, quarantines, events) === "blocked_other_site"
+    })
+    expect(crossSite.length).toBeGreaterThan(0)
+    for (const a of crossSite) expect(hasActiveQuarantine(a, quarantines)).toBe(false)
+  })
+
+  it("nunca hay dos APPLY solapados para la misma IP, aunque sean de sitios distintos", () => {
     const events = mockMitigationEvents({ limit: 1000 })
     const applies = events.filter((e) => e.event_type === "APPLY").sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
     for (const [i, e] of applies.entries()) {
-      const next = applies.slice(i + 1).find((x) => x.site_id === e.site_id && x.source_ip === e.source_ip)
+      const next = applies.slice(i + 1).find((x) => x.source_ip === e.source_ip)
       if (!next) continue
       const reversion = events.find((r) => r.original_event_id === e.id)
-      expect(reversion, `APPLY #${e.id} sin reversión pero hay otro posterior`).toBeDefined()
+      expect(reversion, `APPLY #${e.id} sin reversión pero hay otro posterior de la misma IP`).toBeDefined()
       expect(Date.parse(reversion!.occurred_at)).toBeLessThanOrEqual(Date.parse(next.occurred_at))
     }
   })

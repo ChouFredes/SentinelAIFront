@@ -7,6 +7,7 @@ const STYLE: Record<AlertState, string> = {
   reverted_manual: "border-border bg-muted/50 text-muted-foreground",
   reverted_timer: "border-border bg-muted/50 text-muted-foreground",
   blocked_prior_quarantine: "border-critical/20 bg-critical/8 text-critical-foreground/80",
+  blocked_other_site: "border-critical/20 bg-critical/8 text-critical-foreground/80",
   suspended_link: "border-high/30 bg-high/12 text-high-foreground",
   informative: "border-primary/30 bg-primary/10 text-primary",
   detected: "border-border bg-muted/50 text-muted-foreground",

@@ -47,6 +47,7 @@ export type AlertState =
   | "reverted_manual"
   | "reverted_timer"
   | "blocked_prior_quarantine"
+  | "blocked_other_site"
   | "suspended_link"
   | "informative"
   | "detected"
@@ -56,6 +57,7 @@ export const ALERT_STATE_LABEL: Record<AlertState, string> = {
   reverted_manual: "Revertida (manual)",
   reverted_timer: "Revertida (vencimiento)",
   blocked_prior_quarantine: "Bloqueada (cuarentena previa)",
+  blocked_other_site: "Bloqueada (cuarentena de otro sitio)",
   suspended_link: "Suspendida: enlace degradado",
   informative: "Informativa",
   detected: "Detectada",
@@ -82,9 +84,12 @@ export function deriveAlertState(
       const reversion = events.find((e) => e.original_event_id === own.id)
       if (reversion?.event_type === "MANUAL_REVERSION") return "reverted_manual"
       if (reversion) return "reverted_timer"
-    } else if (findCoveringApply(alert, events)) {
+    } else {
       // El backend deja mitigation_applied=true sin APPLY nuevo cuando la regla ya existía.
-      return "blocked_prior_quarantine"
+      const covering = findCoveringApply(alert, events)
+      if (covering) {
+        return covering.site_id === alert.site_id ? "blocked_prior_quarantine" : "blocked_other_site"
+      }
     }
   }
   return "detected"
@@ -105,17 +110,23 @@ export function findOwnApply(alert: AlertKey, events: MitigationEvent[]): Mitiga
 }
 
 /**
- * Un APPLY anterior de la misma IP y sitio cuya cuarentena seguía en pie cuando
- * ocurrió la alerta: aplicado antes (o a la vez) y sin reversión todavía.
+ * Un APPLY anterior de esta IP cuya cuarentena seguía en pie cuando ocurrió la
+ * alerta: aplicado antes (o a la vez) y sin reversión todavía. La regla de
+ * iptables es global (por IP, no por sitio), así que si no hay uno del mismo
+ * sitio se busca en cualquier otro; el del mismo sitio tiene prioridad. El
+ * llamador distingue los casos con `apply.site_id !== alert.site_id`.
  */
 export function findCoveringApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
   const t = Date.parse(alert.occurred_at)
-  return events.find((apply) => {
-    if (apply.event_type !== "APPLY" || apply.site_id !== alert.site_id || apply.source_ip !== alert.source_ip) return false
+  const covers = (apply: MitigationEvent) => {
+    if (apply.event_type !== "APPLY" || apply.source_ip !== alert.source_ip) return false
     if (Date.parse(apply.occurred_at) > t) return false
     const reversion = events.find((e) => e.original_event_id === apply.id)
     return !reversion || t < Date.parse(reversion.occurred_at)
-  })
+  }
+  return (
+    events.find((e) => e.site_id === alert.site_id && covers(e)) ?? events.find((e) => e.site_id !== alert.site_id && covers(e))
+  )
 }
 
 /**

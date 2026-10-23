@@ -202,12 +202,11 @@ function quarantineEnd(st: Store, apply: MitigationEvent): number {
 
 function applyMitigation(st: Store, alert: AlertView, now: number): void {
   const t = Date.parse(alert.occurred_at)
-  // La IP ya estaba en cuarentena en este sitio: como en /ingest, la regla existe, la alerta
-  // queda con mitigation_applied=true y no se registra un APPLY nuevo.
+  // La IP ya estaba en cuarentena: como en /ingest, la regla de iptables existe (es global,
+  // por IP y no por sitio), la alerta queda con mitigation_applied=true y no se registra un APPLY nuevo.
   const covering = st.events.find(
     (e) =>
       e.event_type === "APPLY" &&
-      e.site_id === alert.site_id &&
       e.source_ip === alert.source_ip &&
       Date.parse(e.occurred_at) <= t &&
       quarantineEnd(st, e) > t,
@@ -260,7 +259,7 @@ function spawnDetection(st: Store, now: number, secondsAgo = 0): AlertView {
   const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
   // Incluye dos hosts internos (uno fuera del inventario): también se aíslan.
   const candidates = [...PUBLIC_SOURCES, `192.168.${siteId}.41`, `192.168.${siteId}.66`]
-  const free = candidates.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
+  const free = candidates.filter((ip) => !st.quarantines.some((q) => q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
     at: now - secondsAgo * 1000,
@@ -292,7 +291,9 @@ function build(now: number): Store {
     const events = st.events.length
     applyMitigation(st, alert, now)
     if (!repeated && st.events.length > events && st.rng() < 0.3) {
-      pending.push({ at: at + 5_000 + st.rng() * 30_000, siteId, source })
+      // A veces el mismo atacante (IP pública) aparece en el otro sitio con respuesta activa.
+      const otherSite = !isPrivateIp(source) && st.rng() < 0.35
+      pending.push({ at: at + 5_000 + st.rng() * 30_000, siteId: otherSite ? (siteId === 1 ? 3 : 1) : siteId, source })
     }
   }
   const flush = (until: number) => {
@@ -318,17 +319,21 @@ function build(now: number): Store {
   // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva, y una
   // repetición de la primera mientras sigue en cuarentena (estado "Bloqueada (cuarentena previa)").
   const first = spawnDetection(st, now, 12)
-  spawnDetection(st, now, 30)
-  if (first.mitigation_applied) {
+  const second = spawnDetection(st, now, 30)
+  const repeat = (parent: AlertView, siteId: number, secondsAgo: number) => {
     const repeated = createAlert(st, {
-      siteId: first.site_id,
-      at: now - 5_000,
-      source: first.source_ip,
-      mse: first.mse_score * 0.8,
+      siteId,
+      at: now - secondsAgo * 1000,
+      source: parent.source_ip,
+      mse: parent.mse_score * 0.8,
       forceMitigation: true,
     })
     if (repeated.mitigation_applied) applyMitigation(st, repeated, now)
   }
+  if (first.mitigation_applied) repeat(first, first.site_id, 5)
+  // Y el mismo atacante en el otro sitio con respuesta activa (la regla de iptables es global).
+  const attacker = [first, second].find((a) => a.mitigation_applied && !isPrivateIp(a.source_ip))
+  if (attacker) repeat(attacker, attacker.site_id === 1 ? 3 : 1, 3)
   return st
 }
 

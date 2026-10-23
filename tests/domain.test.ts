@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   HEARTBEAT_TIMEOUT_MS,
+  ALERT_STATE_LABEL,
   QUARANTINE_MATCH_WINDOW_MS,
   TAU,
   alertReason,
@@ -294,11 +295,11 @@ describe("alerta repetida dentro de una cuarentena previa", () => {
     expect(deriveAlertState(a, [], [apply, reversionAt("2026-10-19T17:10:55.000Z", "MANUAL_REVERSION")])).toBe("blocked_prior_quarantine")
   })
 
-  it("sin APPLY previo, o de otra IP o sitio, no está bloqueada", () => {
+  it("sin APPLY previo, o de otra IP, no está bloqueada", () => {
     const a = repeated("2026-10-19T17:10:38.000Z")
     expect(deriveAlertState(a, [], [])).toBe("detected")
     expect(deriveAlertState(a, [], [ev({ id: 10, source_ip: "198.51.100.7", occurred_at: apply.occurred_at })])).toBe("detected")
-    expect(deriveAlertState(a, [], [ev({ id: 10, site_id: 2, occurred_at: apply.occurred_at })])).toBe("detected")
+    expect(deriveAlertState(a, [], [ev({ id: 10, site_id: 2, source_ip: "198.51.100.7", occurred_at: apply.occurred_at })])).toBe("detected")
   })
 
   it("un APPLY posterior a la alerta no la cubre", () => {
@@ -316,5 +317,60 @@ describe("alerta repetida dentro de una cuarentena previa", () => {
     const q = quarantine({ quarantined_at: apply.occurred_at })
     expect(hasActiveQuarantine(a, [q])).toBe(false)
     expect(deriveAlertState(a, [q], [apply])).toBe("blocked_prior_quarantine")
+  })
+})
+
+describe("alerta bloqueada por la cuarentena de otro sitio (la regla de iptables es global)", () => {
+  // La alerta es del sitio 1; el APPLY previo de la misma IP es del sitio 2.
+  const otherApply = ev({ id: 20, site_id: 2, occurred_at: "2026-10-19T17:10:33.000Z" })
+  const otherReversion = (iso: string, type: MitigationEvent["event_type"] = "REVERSION") =>
+    ev({ id: 21, site_id: 2, event_type: type, original_event_id: 20, occurred_at: iso })
+  const a = alert({ id: 5, site_id: 1, occurred_at: "2026-10-19T17:10:40.000Z" })
+
+  it("sin APPLY del mismo sitio, un APPLY de la misma IP en otro sitio la bloquea", () => {
+    expect(findCoveringApply(a, [otherApply])?.id).toBe(20)
+    expect(deriveAlertState(a, [], [otherApply])).toBe("blocked_other_site")
+    expect(ALERT_STATE_LABEL.blocked_other_site).toBe("Bloqueada (cuarentena de otro sitio)")
+  })
+
+  it("misma condición temporal: tiene que ser anterior y sin reversión todavía", () => {
+    expect(deriveAlertState(a, [], [otherApply, otherReversion("2026-10-19T17:11:33.000Z")])).toBe("blocked_other_site")
+    expect(deriveAlertState(a, [], [otherApply, otherReversion("2026-10-19T17:10:39.000Z")])).toBe("detected")
+    expect(deriveAlertState(a, [], [otherApply, otherReversion("2026-10-19T17:10:45.000Z", "MANUAL_REVERSION")])).toBe("blocked_other_site")
+    const early = alert({ id: 5, site_id: 1, occurred_at: "2026-10-19T17:09:00.000Z" })
+    expect(deriveAlertState(early, [], [otherApply])).toBe("detected")
+  })
+
+  it("otra IP en otro sitio no la bloquea", () => {
+    const unrelated = ev({ id: 20, site_id: 2, source_ip: "198.51.100.7", occurred_at: otherApply.occurred_at })
+    expect(deriveAlertState(a, [], [unrelated])).toBe("detected")
+  })
+
+  it("el APPLY del mismo sitio tiene prioridad sobre el de otro sitio", () => {
+    const sameSite = ev({ id: 30, site_id: 1, occurred_at: "2026-10-19T17:10:34.000Z" })
+    expect(findCoveringApply(a, [otherApply, sameSite])?.id).toBe(30)
+    expect(deriveAlertState(a, [], [otherApply, sameSite])).toBe("blocked_prior_quarantine")
+  })
+
+  it("si el del mismo sitio ya se revirtió pero el de otro sitio sigue, queda bloqueada por el otro sitio", () => {
+    const sameSite = ev({ id: 30, site_id: 1, occurred_at: "2026-10-19T17:10:34.000Z" })
+    const sameSiteReversion = ev({ id: 31, site_id: 1, event_type: "REVERSION", original_event_id: 30, occurred_at: "2026-10-19T17:10:36.000Z" })
+    expect(deriveAlertState(a, [], [otherApply, sameSite, sameSiteReversion])).toBe("blocked_other_site")
+  })
+
+  it("no tiene botón Revertir: la cuarentena es de otro sitio", () => {
+    // Aunque el APPLY del otro sitio coincidiera a ±2 s con la alerta, la cuarentena activa es del otro sitio.
+    const q = quarantine({ site_id: 2, quarantined_at: "2026-10-19T17:10:40.500Z" })
+    expect(hasActiveQuarantine(a, [q])).toBe(false)
+    expect(deriveAlertState(a, [q], [otherApply])).toBe("blocked_other_site")
+  })
+
+  it("sin mitigation_applied no se considera bloqueada", () => {
+    expect(deriveAlertState({ ...a, mitigation_applied: false }, [], [otherApply])).toBe("detected")
+  })
+
+  it("una alerta con APPLY propio no se confunde con una de otro sitio", () => {
+    const own = ev({ id: 40, site_id: 1, occurred_at: "2026-10-19T17:10:41.000Z" })
+    expect(deriveAlertState(a, [], [otherApply, own, ev({ id: 41, site_id: 1, event_type: "REVERSION", original_event_id: 40, occurred_at: "2026-10-19T17:11:41.000Z" })])).toBe("reverted_timer")
   })
 })

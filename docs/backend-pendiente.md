@@ -45,7 +45,7 @@ El backend tiene tres severidades (`warning`, `high`, `critical`); el panel las 
 - `anomaly = mse > umbral del sitio` (`custom_mse_threshold` o τ).
 - `critical` si `mse ≥ max(3τ, 3 × umbral del sitio)`; `high` si es anomalía no crítica; `warning` si **no** es anomalía y la alerta existe solo por `unrecognized_device` o `link_degraded`.
 - Hay respuesta activa solo ante anomalía, con `active_response_enabled` y sin modo informativo ni enlace degradado. Se aíslan también las IP privadas; solo se excluyen IPv6, loopback, no especificada, multicast y link-local.
-- Si la IP ya estaba aislada, la alerta queda con `mitigation_applied=true` **sin** APPLY nuevo. El panel la muestra como "Bloqueada (cuarentena previa)", sin botón Revertir (la cuarentena se revierte desde la alerta que la originó).
+- La regla de iptables es global (por IP, no por sitio). Si la IP ya estaba aislada, la alerta queda con `mitigation_applied=true` **sin** APPLY nuevo, aunque la cuarentena la haya abierto otro sitio. El panel la muestra como "Bloqueada (cuarentena previa)" (cuarentena del mismo sitio) o "Bloqueada (cuarentena de otro sitio)", sin botón Revertir: la cuarentena se revierte desde la alerta que la originó.
 
 ## Despliegue
 
