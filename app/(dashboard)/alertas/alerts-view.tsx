@@ -161,6 +161,8 @@ export function AlertsView() {
     downloadFile(`alertas-${new Date().toISOString().slice(0, 10)}.csv`, csv, "text/csv")
   }
 
+  // El backend no informa el total: se muestra solo el tamaño de la página.
+  const pageSize = alerts.data?.items.length ?? 0
   const hasNext = alerts.data?.next_before_id != null
 
   return (
@@ -317,8 +319,8 @@ export function AlertsView() {
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
           <span>
-            Página {pageIndex + 1} · {rows.length} de {alerts.data?.items.length ?? 0} alertas
-            {stateFilter !== "all" && " (filtro de estado aplicado sobre la página)"}
+            Página {pageIndex + 1} · {pageSize} {pageSize === 1 ? "alerta" : "alertas"}
+            {stateFilter !== "all" && ` · ${rows.length} coinciden con el estado`}
           </span>
           <div className="flex items-center gap-2">
             <Button
