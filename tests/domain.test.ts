@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest"
-import { deriveAlertState, hasActiveQuarantine, parseThreshold } from "@/lib/domain"
+import {
+  HEARTBEAT_TIMEOUT_MS,
+  QUARANTINE_MATCH_WINDOW_MS,
+  TAU,
+  criticalThreshold,
+  deriveAlertState,
+  findActiveQuarantine,
+  hasActiveQuarantine,
+  latestSensorActivity,
+  parseThreshold,
+  sensorStatus,
+} from "@/lib/domain"
 import type { AdminQuarantineView, AlertView, MitigationEvent } from "@/lib/api/schemas"
 
 const T0 = "2026-10-19T17:10:32.000Z"
@@ -48,6 +59,48 @@ const quarantine = (over: Partial<AdminQuarantineView> = {}): AdminQuarantineVie
   ...over,
 })
 
+describe("findActiveQuarantine", () => {
+  const T = Date.parse(T0)
+  const at = (offsetMs: number) => new Date(T + offsetMs).toISOString()
+
+  it("empareja la alerta con su cuarentena dentro de ±2 s", () => {
+    for (const offset of [-QUARANTINE_MATCH_WINDOW_MS, 0, 1_000, QUARANTINE_MATCH_WINDOW_MS]) {
+      const q = quarantine({ quarantined_at: at(offset) })
+      expect(findActiveQuarantine(alert(), [q])).toBe(q)
+    }
+  })
+
+  it("fuera de la ventana de 2 s no es la cuarentena de esa alerta", () => {
+    for (const offset of [-(QUARANTINE_MATCH_WINDOW_MS + 1), QUARANTINE_MATCH_WINDOW_MS + 1, 10_000, 60_000]) {
+      expect(hasActiveQuarantine(alert(), [quarantine({ quarantined_at: at(offset) })])).toBe(false)
+    }
+  })
+
+  it("una alerta vieja de una IP hoy en cuarentena no tiene cuarentena activa", () => {
+    const old = alert({ id: 7, occurred_at: "2026-10-18T09:00:00.000Z" })
+    const current = quarantine()
+    expect(hasActiveQuarantine(old, [current])).toBe(false)
+    expect(deriveAlertState(old, [current], [])).not.toBe("quarantine_active")
+    expect(deriveAlertState(alert(), [current], [])).toBe("quarantine_active")
+  })
+
+  it("exige mismo sitio e IP de origen", () => {
+    expect(hasActiveQuarantine(alert(), [quarantine({ site_id: 2 })])).toBe(false)
+    expect(hasActiveQuarantine(alert(), [quarantine({ source_ip: "198.51.100.7" })])).toBe(false)
+  })
+
+  it("no cuenta si ya venció", () => {
+    const expired = quarantine({ expires_at: new Date(Date.now() - 1).toISOString() })
+    expect(findActiveQuarantine(alert(), [expired])).toBeUndefined()
+  })
+
+  it("elige la cuarentena correcta entre varias de la misma IP", () => {
+    const other = quarantine({ quarantined_at: at(30_000) })
+    const mine = quarantine({ quarantined_at: at(500) })
+    expect(findActiveQuarantine(alert(), [other, mine])).toBe(mine)
+  })
+})
+
 describe("deriveAlertState", () => {
   it("cuarentena activa gana sobre todo", () => {
     expect(deriveAlertState(alert(), [quarantine()], [])).toBe("quarantine_active")
@@ -89,5 +142,77 @@ describe("parseThreshold", () => {
 
   it("rechaza cero, negativos y texto", () => {
     for (const bad of ["0", "-1", "abc", "1,2,3", "NaN"]) expect(parseThreshold(bad), bad).toBeUndefined()
+  })
+})
+
+describe("sensorStatus", () => {
+  const NOW = Date.parse("2026-10-23T17:00:00Z")
+  const ago = (ms: number) => new Date(NOW - ms).toISOString()
+  const sensor = (over: Partial<Parameters<typeof sensorStatus>[0]> = {}) => ({
+    is_active: true,
+    last_heartbeat_at: null as string | null,
+    last_ingest_at: null as string | null,
+    last_link_degraded: false,
+    ...over,
+  })
+
+  it("usa la fecha más reciente entre latido e ingest", () => {
+    expect(latestSensorActivity({ last_heartbeat_at: ago(500_000), last_ingest_at: ago(10_000) })).toBe(ago(10_000))
+    expect(latestSensorActivity({ last_heartbeat_at: ago(10_000), last_ingest_at: ago(500_000) })).toBe(ago(10_000))
+    expect(latestSensorActivity({ last_heartbeat_at: null, last_ingest_at: null })).toBeNull()
+  })
+
+  it("ingest reciente con heartbeat viejo → en línea", () => {
+    const s = sensor({ last_heartbeat_at: ago(HEARTBEAT_TIMEOUT_MS * 10), last_ingest_at: ago(5_000) })
+    expect(sensorStatus(s, NOW)).toBe("online")
+  })
+
+  it("heartbeat reciente sin ingest → en línea", () => {
+    expect(sensorStatus(sensor({ last_heartbeat_at: ago(5_000) }), NOW)).toBe("online")
+  })
+
+  it("solo ingest (sensor Edge, sin heartbeat) → en línea", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(5_000) }), NOW)).toBe("online")
+  })
+
+  it("sin ninguna fecha → sin conexión", () => {
+    expect(sensorStatus(sensor(), NOW)).toBe("offline")
+  })
+
+  it("ambas fechas vencidas → sin conexión", () => {
+    const s = sensor({ last_heartbeat_at: ago(HEARTBEAT_TIMEOUT_MS + 1), last_ingest_at: ago(HEARTBEAT_TIMEOUT_MS + 5_000) })
+    expect(sensorStatus(s, NOW)).toBe("offline")
+  })
+
+  it("justo en el límite sigue en línea", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(HEARTBEAT_TIMEOUT_MS) }), NOW)).toBe("online")
+  })
+
+  it("sensor inactivo → sin conexión aunque tenga actividad reciente", () => {
+    expect(sensorStatus(sensor({ is_active: false, last_ingest_at: ago(1_000) }), NOW)).toBe("offline")
+  })
+
+  it("enlace degradado prevalece sobre en línea, no sobre sin conexión", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(1_000), last_link_degraded: true }), NOW)).toBe("link_degraded")
+    expect(sensorStatus(sensor({ last_link_degraded: true }), NOW)).toBe("offline")
+  })
+})
+
+describe("criticalThreshold", () => {
+  it("sin umbral propio es 3τ", () => {
+    expect(criticalThreshold(null)).toBeCloseTo(3 * TAU, 12)
+    expect(criticalThreshold(undefined)).toBeCloseTo(3 * TAU, 12)
+  })
+
+  it("con umbral propio mayor que τ es 3 veces ese umbral", () => {
+    expect(criticalThreshold(0.0004)).toBeCloseTo(0.0012, 12)
+  })
+
+  it("con umbral propio menor que τ manda 3τ", () => {
+    expect(criticalThreshold(0.0001)).toBeCloseTo(3 * TAU, 12)
+  })
+
+  it("con umbral propio igual a τ es 3τ", () => {
+    expect(criticalThreshold(TAU)).toBeCloseTo(3 * TAU, 12)
   })
 })

@@ -25,13 +25,14 @@ import { SeverityBadge } from "@/components/severity-badge"
 import { SimpleSelect } from "@/components/simple-select"
 import { useSite } from "@/components/site-provider"
 import { useAlerts, useMitigationEvents, useQuarantines } from "@/lib/api/queries"
-import { severitySchema, type AlertView, type Severity } from "@/lib/api/schemas"
+import { severitySchema, type Severity } from "@/lib/api/schemas"
 import { downloadFile, toCsv } from "@/lib/csv"
 import {
   ALERT_STATE_LABEL,
   SEVERITY_LABEL,
   TAU,
   deriveAlertState,
+  findActiveQuarantine,
   type AlertState,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatShortDateTime } from "@/lib/format"
@@ -137,12 +138,6 @@ export function AlertsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alerts.data, quarantines.data, events.data, stateFilter, now])
 
-  function activeQuarantine(alert: AlertView) {
-    return (quarantines.data ?? []).find(
-      (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > now,
-    )
-  }
-
   function exportCsv() {
     const csv = toCsv(
       ["id", "sitio", "sensor_id", "origen", "destino", "puerto", "mse", "severidad", "estado", "dispositivo_no_reconocido", "enlace_degradado", "modo_informativo", "mitigada", "fecha"],
@@ -166,6 +161,8 @@ export function AlertsView() {
     downloadFile(`alertas-${new Date().toISOString().slice(0, 10)}.csv`, csv, "text/csv")
   }
 
+  // El backend no informa el total: se muestra solo el tamaño de la página.
+  const pageSize = alerts.data?.items.length ?? 0
   const hasNext = alerts.data?.next_before_id != null
 
   return (
@@ -256,7 +253,7 @@ export function AlertsView() {
                 </TableRow>
               )}
               {rows.map(({ alert, state }) => {
-                const q = activeQuarantine(alert)
+                const q = findActiveQuarantine(alert, quarantines.data ?? [], now)
                 return (
                   <TableRow key={alert.id}>
                     <TableCell>
@@ -322,8 +319,8 @@ export function AlertsView() {
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
           <span>
-            Página {pageIndex + 1} · {rows.length} de {alerts.data?.items.length ?? 0} alertas
-            {stateFilter !== "all" && " (filtro de estado aplicado sobre la página)"}
+            Página {pageIndex + 1} · {pageSize} {pageSize === 1 ? "alerta" : "alertas"}
+            {stateFilter !== "all" && ` · ${rows.length} coinciden con el estado`}
           </span>
           <div className="flex items-center gap-2">
             <Button

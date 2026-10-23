@@ -23,9 +23,11 @@ import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSe
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
   MITIGATION_REASON_LABEL,
+  QUARANTINE_MATCH_WINDOW_MS,
   QUARANTINE_SECONDS,
   TAU,
   deriveAlertState,
+  findActiveQuarantine,
   mitigationActor,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
@@ -46,11 +48,11 @@ function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[]
       at: alert.occurred_at,
       event: `Alerta registrada (${alert.severity === "critical" ? "crítica" : alert.severity === "high" ? "alta" : "advertencia"})`,
       actor: "Motor",
-      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, piso)" : "MSE ≥ τ del sitio",
+      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, 3 × umbral del sitio)" : "MSE ≥ umbral del sitio",
     },
   ]
   const apply = events.find(
-    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= 5_000,
+    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
   )
   if (!apply) {
     if (alert.informative_only_mode) {
@@ -116,11 +118,7 @@ export function AlertDetail({ alertId }: { alertId: number }) {
   const siteName = alert ? (sites.find((s) => s.id === alert.site_id)?.name ?? `Sitio ${alert.site_id}`) : ""
   const sensorName = alert ? (sensors.data?.find((s) => s.sensor_id === alert.sensor_id)?.name ?? `sensor ${alert.sensor_id}`) : ""
   const threshold = config.data?.custom_mse_threshold ?? TAU
-  const quarantine = alert
-    ? quarantines.data?.find(
-        (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > now,
-      )
-    : undefined
+  const quarantine = alert ? findActiveQuarantine(alert, quarantines.data ?? [], now) : undefined
   const state = alert ? deriveAlertState(alert, quarantines.data ?? [], events.data ?? []) : undefined
 
   return (
@@ -177,7 +175,7 @@ export function AlertDetail({ alertId }: { alertId: number }) {
                     <ScoreBar score={alert.mse_score} threshold={threshold} />
                     <p className="text-xs text-muted-foreground">
                       El MSE es {(alert.mse_score / threshold).toLocaleString("es-AR", { maximumFractionDigits: 1 })} veces el
-                      umbral{config.data?.custom_mse_threshold != null ? " propio del sitio" : " global (τ)"}. Las marcas indican τ y 3τ.
+                      umbral{config.data?.custom_mse_threshold != null ? " propio del sitio" : " global (τ)"}. Las marcas indican el umbral del sitio y el umbral crítico (3 × el mayor entre τ global y el umbral del sitio).
                     </p>
                   </div>
                   <PendingFeature

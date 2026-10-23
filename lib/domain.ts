@@ -4,6 +4,7 @@ import type {
   MitigationEvent,
   Severity,
 } from "@/lib/api/schemas"
+import { parseIso } from "@/lib/format"
 
 /** τ: umbral MSE global. */
 export const TAU = 0.000308
@@ -11,13 +12,22 @@ export const TAU = 0.000308
 export const QUARANTINE_SECONDS = 60
 /** Una alerta es critical cuando MSE ≥ max(3τ, piso). */
 export const CRITICAL_FACTOR = 3
+/**
+ * Una alerta y la cuarentena (o el APPLY) que disparó se registran casi en el
+ * mismo instante; fuera de esta ventana son hechos distintos de la misma IP.
+ */
+export const QUARANTINE_MATCH_WINDOW_MS = 2_000
 
 export function effectiveThreshold(customMseThreshold: number | null | undefined): number {
   return customMseThreshold ?? TAU
 }
 
-export function criticalThreshold(tau: number): number {
-  return CRITICAL_FACTOR * tau
+/**
+ * Umbral desde el que una alerta es critical, como en el backend:
+ * max(3·τ global, 3·umbral del sitio). Con umbral propio por debajo de τ manda 3τ.
+ */
+export function criticalThreshold(customMseThreshold: number | null | undefined): number {
+  return Math.max(CRITICAL_FACTOR * TAU, CRITICAL_FACTOR * effectiveThreshold(customMseThreshold))
 }
 
 export const SEVERITY_LABEL: Record<Severity, string> = {
@@ -69,7 +79,7 @@ export function deriveAlertState(
         e.event_type === "APPLY" &&
         e.site_id === alert.site_id &&
         e.source_ip === alert.source_ip &&
-        Math.abs(Date.parse(e.occurred_at) - t) <= 5_000,
+        Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
     )
     if (apply) {
       const reversion = events.find((e) => e.original_event_id === apply.id)
@@ -80,17 +90,32 @@ export function deriveAlertState(
   return "detected"
 }
 
-export function hasActiveQuarantine(
-  alert: Pick<AlertView, "site_id" | "source_ip">,
+/**
+ * La cuarentena vigente que originó esta alerta: mismo sitio e IP de origen,
+ * registrada dentro de la ventana de la alerta y todavía sin vencer. Una alerta
+ * anterior de una IP que hoy está en cuarentena no cuenta.
+ */
+export function findActiveQuarantine(
+  alert: Pick<AlertView, "site_id" | "source_ip" | "occurred_at">,
   activeQuarantines: AdminQuarantineView[],
   now = Date.now(),
-): boolean {
-  return activeQuarantines.some(
+): AdminQuarantineView | undefined {
+  const t = Date.parse(alert.occurred_at)
+  return activeQuarantines.find(
     (q) =>
       q.site_id === alert.site_id &&
       q.source_ip === alert.source_ip &&
+      Math.abs(Date.parse(q.quarantined_at) - t) <= QUARANTINE_MATCH_WINDOW_MS &&
       Date.parse(q.expires_at) > now,
   )
+}
+
+export function hasActiveQuarantine(
+  alert: Pick<AlertView, "site_id" | "source_ip" | "occurred_at">,
+  activeQuarantines: AdminQuarantineView[],
+  now = Date.now(),
+): boolean {
+  return findActiveQuarantine(alert, activeQuarantines, now) !== undefined
 }
 
 export type MitigationActor = "Motor" | "Temporizador" | "Administrador"
@@ -133,15 +158,35 @@ export const SENSOR_STATUS_LABEL: Record<SensorStatus, string> = {
   offline: "Sin conexión",
 }
 
-/** Sin latido en 2 minutos = sin conexión. */
+/** Sin actividad (latido o envío de flujos) en 2 minutos = sin conexión. */
 export const HEARTBEAT_TIMEOUT_MS = 120_000
 
+/**
+ * Última vez que el sensor dio señales de vida: la fecha más reciente entre el
+ * latido y el último envío de flujos. El sensor Edge no llama a /heartbeat,
+ * así que mirar solo el latido lo daría por caído.
+ */
+export function latestSensorActivity(s: {
+  last_heartbeat_at: string | null
+  last_ingest_at: string | null
+}): string | null {
+  const dates = [s.last_heartbeat_at, s.last_ingest_at].filter((d): d is string => d !== null)
+  if (dates.length === 0) return null
+  return dates.reduce((a, b) => (parseIso(b).getTime() > parseIso(a).getTime() ? b : a))
+}
+
 export function sensorStatus(
-  s: { is_active: boolean; last_heartbeat_at: string | null; last_link_degraded: boolean },
+  s: {
+    is_active: boolean
+    last_heartbeat_at: string | null
+    last_ingest_at: string | null
+    last_link_degraded: boolean
+  },
   now = Date.now(),
 ): SensorStatus {
-  if (!s.is_active || !s.last_heartbeat_at) return "offline"
-  if (now - Date.parse(s.last_heartbeat_at) > HEARTBEAT_TIMEOUT_MS) return "offline"
+  const last = latestSensorActivity(s)
+  if (!s.is_active || last === null) return "offline"
+  if (now - parseIso(last).getTime() > HEARTBEAT_TIMEOUT_MS) return "offline"
   return s.last_link_degraded ? "link_degraded" : "online"
 }
 

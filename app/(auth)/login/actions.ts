@@ -2,17 +2,12 @@
 
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
+import { safeNext } from "@/lib/safe-next"
 import { getEnv } from "@/lib/server/env"
 import { SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, createSessionToken, safeEqual } from "@/lib/session"
 
 export interface LoginState {
   error?: string
-}
-
-/** Solo rutas internas: evita usar ?next= como redirect abierto. */
-function safeNext(raw: FormDataEntryValue | null): string {
-  const next = typeof raw === "string" ? raw : ""
-  return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/login") ? next : "/"
 }
 
 export async function login(_prev: LoginState, formData: FormData): Promise<LoginState> {

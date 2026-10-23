@@ -3,7 +3,7 @@
 // SENTINEL_USE_MOCKS=true. PUT config y revert mutan este estado, así que la demo
 // reacciona; en Vercel se reinicia con cada instancia fría.
 import { ipInCidrs, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
-import { QUARANTINE_SECONDS, TAU } from "@/lib/domain"
+import { QUARANTINE_SECONDS, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import type {
   AdminQuarantineView,
@@ -20,8 +20,6 @@ import type {
 } from "@/lib/api/schemas"
 
 const DAY = 86_400_000
-/** Piso de "critical" en los mocks (el backend usa max(3τ, piso)). */
-const CRITICAL_FLOOR = 0.005
 
 const SITES = [
   { id: 1, slug: "deposito-central", name: "Depósito central", is_active: true },
@@ -31,7 +29,8 @@ const SITES = [
 
 const SENSORS = [
   { sensor_id: 7, site_id: 1, name: "SN-0007", heartbeatAgo: 12, ingestAgo: 4, flows: 482_113, degraded: false },
-  { sensor_id: 12, site_id: 2, name: "SN-0012", heartbeatAgo: 20, ingestAgo: 9, flows: 233_870, degraded: false },
+  // Sin heartbeat: como el sensor Edge, que solo envía flujos.
+  { sensor_id: 12, site_id: 2, name: "SN-0012", heartbeatAgo: null, ingestAgo: 9, flows: 233_870, degraded: false },
   { sensor_id: 21, site_id: 3, name: "SN-0021", heartbeatAgo: 8, ingestAgo: 3, flows: 310_552, degraded: false },
   { sensor_id: 22, site_id: 3, name: "SN-0022", heartbeatAgo: 31, ingestAgo: 17, flows: 98_240, degraded: true },
 ]
@@ -104,10 +103,23 @@ function initialConfigs(): Map<number, SiteConfigView> {
   ])
 }
 
-function severityOf(mse: number): Severity {
-  if (mse >= CRITICAL_FLOOR) return "critical"
-  if (mse >= 3 * TAU) return "high"
+/**
+ * critical desde criticalThreshold (como el backend). El backend no define el
+ * nivel intermedio: los mocks usan "high" desde 2 veces el umbral del sitio.
+ */
+function severityOf(mse: number, customThreshold: number | null): Severity {
+  if (mse >= criticalThreshold(customThreshold)) return "critical"
+  if (mse >= 2 * effectiveThreshold(customThreshold)) return "high"
   return "warning"
+}
+
+/** MSE de una alerta nueva, por tramos para tener una mezcla creíble de severidades (~45/25/30 %). */
+function randomMse(rng: () => number, customThreshold: number | null): number {
+  const threshold = effectiveThreshold(customThreshold)
+  const roll = rng()
+  if (roll < 0.45) return threshold * (1.05 + rng() * 0.9)
+  if (roll < 0.7) return threshold * (2 + rng() * 0.95)
+  return criticalThreshold(customThreshold) * (1 + Math.pow(rng(), 2) * 15)
 }
 
 function pick<T>(rng: () => number, list: T[]): T {
@@ -129,21 +141,21 @@ interface NewAlert {
 
 function createAlert(st: Store, a: NewAlert): AlertView {
   const cfg = st.configs.get(a.siteId)!
-  const threshold = cfg.custom_mse_threshold ?? TAU
-  const mse = a.mse ?? threshold * (1.05 + Math.pow(st.rng(), 3) * 80)
-  const severity = severityOf(mse)
+  const mse = a.mse ?? randomMse(st.rng, cfg.custom_mse_threshold)
+  const severity = severityOf(mse, cfg.custom_mse_threshold)
   const sensorId = a.forceMitigation
     ? SENSORS.find((s) => s.site_id === a.siteId && !s.degraded)!.sensor_id
     : sensorFor(st.rng, a.siteId)
   const sensor = SENSORS.find((s) => s.sensor_id === sensorId)!
   const isPrivate = a.source.startsWith("192.168.")
   const linkDegraded = !a.forceMitigation && sensor.degraded && st.rng() < 0.35
+  // Una advertencia nunca dispara cuarentena.
   const mitigated =
     cfg.active_response_enabled &&
     !cfg.informative_only_mode &&
     !linkDegraded &&
     !isPrivate &&
-    (a.forceMitigation || severity !== "warning")
+    severity !== "warning"
   const alert: AlertView = {
     id: st.nextAlertId++,
     site_id: a.siteId,
@@ -166,6 +178,14 @@ function createAlert(st: Store, a: NewAlert): AlertView {
 
 function applyMitigation(st: Store, alert: AlertView, now: number): void {
   const applyAt = Date.parse(alert.occurred_at) + 1000
+  // La IP ya está en cuarentena en este sitio: no se aplica una segunda regla.
+  const alreadyQuarantined = st.quarantines.some(
+    (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > applyAt,
+  )
+  if (alreadyQuarantined) {
+    alert.mitigation_applied = false
+    return
+  }
   const apply: MitigationEvent = {
     id: st.nextEventId++,
     site_id: alert.site_id,
@@ -208,11 +228,13 @@ function applyMitigation(st: Store, alert: AlertView, now: number): void {
 
 function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   const siteId = pick(st.rng, [1, 3])
-  const mse = 0.004 + st.rng() * 0.02
+  // Siempre por encima del umbral crítico del sitio.
+  const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
+  const free = PUBLIC_SOURCES.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
     at: now - secondsAgo * 1000,
-    source: pick(st.rng, PUBLIC_SOURCES),
+    source: pick(st.rng, free),
     mse,
     forceMitigation: true,
   })
@@ -321,11 +343,11 @@ export function mockTelemetry(sensorId: number, now = Date.now()): SensorTelemet
     sensor_id: s.sensor_id,
     site_id: s.site_id,
     is_active: true,
-    last_heartbeat_at: iso(now - s.heartbeatAgo * 1000),
+    last_heartbeat_at: s.heartbeatAgo === null ? null : iso(now - s.heartbeatAgo * 1000),
     last_ingest_at: iso(now - s.ingestAgo * 1000),
     flow_count: s.flows,
     last_link_degraded: s.degraded,
-    last_link_report_at: iso(now - s.heartbeatAgo * 1000),
+    last_link_report_at: iso(now - (s.heartbeatAgo ?? s.ingestAgo) * 1000),
   }
 }
 

@@ -23,6 +23,7 @@ import {
   mockUpdateSiteConfig,
   resetMockStore,
 } from "@/lib/api/mocks/store"
+import { QUARANTINE_MATCH_WINDOW_MS as WINDOW, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import { computeSummary } from "@/lib/server/summary"
 
@@ -47,6 +48,62 @@ describe("mocks cumplen los esquemas", () => {
     expect(alerts.some((a) => a.unrecognized_device)).toBe(true)
     expect(alerts.some((a) => a.link_degraded)).toBe(true)
     expect(mockQuarantines().length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("una advertencia nunca dispara cuarentena", () => {
+    const warnings = mockAlerts().filter((a) => a.severity === "warning")
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(warnings.every((a) => !a.mitigation_applied)).toBe(true)
+    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
+    for (const w of warnings) {
+      expect(applies.some((e) => e.site_id === w.site_id && e.source_ip === w.source_ip && Math.abs(Date.parse(e.occurred_at) - Date.parse(w.occurred_at)) <= WINDOW)).toBe(false)
+    }
+  })
+
+  it("cada alerta mitigada tiene su APPLY a ±2 s y viceversa", () => {
+    const alerts = mockAlerts()
+    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
+    const near = (e: { site_id: number; source_ip: string; occurred_at: string }, a: { site_id: number; source_ip: string; occurred_at: string }) =>
+      e.site_id === a.site_id && e.source_ip === a.source_ip && Math.abs(Date.parse(e.occurred_at) - Date.parse(a.occurred_at)) <= WINDOW
+    for (const a of alerts.filter((x) => x.mitigation_applied)) {
+      expect(applies.filter((e) => near(e, a))).toHaveLength(1)
+    }
+    for (const e of applies) {
+      expect(alerts.filter((a) => a.mitigation_applied && near(e, a))).toHaveLength(1)
+    }
+  })
+
+  it("cada cuarentena activa tiene exactamente una alerta emparejada", () => {
+    const alerts = mockAlerts()
+    for (const q of mockQuarantines()) {
+      const matches = alerts.filter(
+        (a) =>
+          a.site_id === q.site_id &&
+          a.source_ip === q.source_ip &&
+          Math.abs(Date.parse(a.occurred_at) - Date.parse(q.quarantined_at)) <= WINDOW,
+      )
+      expect(matches).toHaveLength(1)
+      expect(matches[0].mitigation_applied).toBe(true)
+      expect(matches[0].severity).not.toBe("warning")
+    }
+  })
+
+  it("nunca hay dos cuarentenas activas para el mismo sitio e IP", () => {
+    const keys = mockQuarantines().map((q) => `${q.site_id}|${q.source_ip}`)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it("la severidad de cada alerta sale de su MSE y del umbral de su sitio", () => {
+    const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
+    for (const a of mockAlerts()) {
+      const custom = customBySite.get(a.site_id) ?? null
+      const crit = criticalThreshold(custom)
+      expect(a.mse_score).toBeGreaterThanOrEqual(effectiveThreshold(custom))
+      if (a.severity === "critical") expect(a.mse_score).toBeGreaterThanOrEqual(crit)
+      else expect(a.mse_score).toBeLessThan(crit)
+      if (a.severity === "high") expect(a.mse_score).toBeGreaterThanOrEqual(2 * effectiveThreshold(custom))
+      if (a.severity === "warning") expect(a.mse_score).toBeLessThan(2 * effectiveThreshold(custom))
+    }
   })
 
   it("cada reversión referencia un APPLY existente", () => {
