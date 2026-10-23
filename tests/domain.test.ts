@@ -3,6 +3,7 @@ import {
   HEARTBEAT_TIMEOUT_MS,
   QUARANTINE_MATCH_WINDOW_MS,
   TAU,
+  alertReason,
   criticalThreshold,
   deriveAlertState,
   findActiveQuarantine,
@@ -214,5 +215,49 @@ describe("criticalThreshold", () => {
 
   it("con umbral propio igual a τ es 3τ", () => {
     expect(criticalThreshold(TAU)).toBeCloseTo(3 * TAU, 12)
+  })
+})
+
+describe("alertReason", () => {
+  it("critical y high", () => {
+    expect(alertReason(alert({ severity: "critical" }))).toBe("MSE ≥ máx(3τ, 3 × umbral del sitio)")
+    expect(alertReason(alert({ severity: "high" }))).toBe("MSE sobre el umbral del sitio")
+  })
+
+  it("warning por dispositivo no reconocido", () => {
+    const a = alert({ severity: "warning", anomaly: false, unrecognized_device: true, link_degraded: false })
+    expect(alertReason(a)).toBe("MSE bajo el umbral; alerta por dispositivo no reconocido")
+  })
+
+  it("warning por enlace degradado", () => {
+    const a = alert({ severity: "warning", anomaly: false, unrecognized_device: false, link_degraded: true })
+    expect(alertReason(a)).toBe("MSE bajo el umbral; alerta por enlace degradado")
+  })
+
+  it("warning por ambos flags", () => {
+    const a = alert({ severity: "warning", anomaly: false, unrecognized_device: true, link_degraded: true })
+    expect(alertReason(a)).toBe("MSE bajo el umbral; alerta por dispositivo no reconocido y enlace degradado")
+  })
+
+  it("una warning nunca dice que el MSE superó el umbral", () => {
+    const a = alert({ severity: "warning", anomaly: false, unrecognized_device: true })
+    expect(alertReason(a)).not.toMatch(/≥|sobre el umbral/)
+  })
+})
+
+describe("deriveAlertState sin anomalía", () => {
+  it("una advertencia por enlace degradado no es 'suspendida'", () => {
+    const w = alert({ severity: "warning", anomaly: false, link_degraded: true, mitigation_applied: false })
+    expect(deriveAlertState(w, [], [])).toBe("detected")
+  })
+
+  it("una advertencia en modo informativo no es 'informativa'", () => {
+    const w = alert({ severity: "warning", anomaly: false, unrecognized_device: true, informative_only_mode: true, mitigation_applied: false })
+    expect(deriveAlertState(w, [], [])).toBe("detected")
+  })
+
+  it("una anomalía sigue siendo informativa / suspendida", () => {
+    expect(deriveAlertState(alert({ informative_only_mode: true, mitigation_applied: false }), [], [])).toBe("informative")
+    expect(deriveAlertState(alert({ link_degraded: true, mitigation_applied: false }), [], [])).toBe("suspended_link")
   })
 })

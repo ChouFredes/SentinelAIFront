@@ -26,6 +26,7 @@ import {
   QUARANTINE_MATCH_WINDOW_MS,
   QUARANTINE_SECONDS,
   TAU,
+  alertReason,
   deriveAlertState,
   findActiveQuarantine,
   mitigationActor,
@@ -48,16 +49,16 @@ function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[]
       at: alert.occurred_at,
       event: `Alerta registrada (${alert.severity === "critical" ? "crítica" : alert.severity === "high" ? "alta" : "advertencia"})`,
       actor: "Motor",
-      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, 3 × umbral del sitio)" : "MSE ≥ umbral del sitio",
+      reason: alertReason(alert),
     },
   ]
   const apply = events.find(
     (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
   )
   if (!apply) {
-    if (alert.informative_only_mode) {
+    if (alert.anomaly && alert.informative_only_mode) {
       rows.push({ key: "none", at: alert.occurred_at, event: "Sin acción de red", actor: "Motor", reason: "modo informativo" })
-    } else if (alert.link_degraded) {
+    } else if (alert.anomaly && alert.link_degraded) {
       rows.push({ key: "none", at: alert.occurred_at, event: "Sin acción de red", actor: "Motor", reason: "enlace degradado: respuesta suspendida" })
     }
     return rows

@@ -93,16 +93,39 @@ describe("mocks cumplen los esquemas", () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
-  it("la severidad de cada alerta sale de su MSE y del umbral de su sitio", () => {
+  it("anomaly y severidad siguen la regla de /ingest con el umbral del sitio", () => {
     const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
     for (const a of mockAlerts()) {
       const custom = customBySite.get(a.site_id) ?? null
-      const crit = criticalThreshold(custom)
-      expect(a.mse_score).toBeGreaterThanOrEqual(effectiveThreshold(custom))
-      if (a.severity === "critical") expect(a.mse_score).toBeGreaterThanOrEqual(crit)
-      else expect(a.mse_score).toBeLessThan(crit)
-      if (a.severity === "high") expect(a.mse_score).toBeGreaterThanOrEqual(2 * effectiveThreshold(custom))
-      if (a.severity === "warning") expect(a.mse_score).toBeLessThan(2 * effectiveThreshold(custom))
+      const threshold = effectiveThreshold(custom)
+      expect(a.anomaly, `anomaly #${a.id}`).toBe(a.mse_score > threshold)
+      expect(a.severity === "critical", `critical #${a.id}`).toBe(a.mse_score >= criticalThreshold(custom))
+      expect(a.severity === "high", `high #${a.id}`).toBe(a.anomaly && a.mse_score < criticalThreshold(custom))
+      expect(a.severity === "warning", `warning #${a.id}`).toBe(!a.anomaly)
+    }
+  })
+
+  it("toda warning tiene MSE bajo el umbral y al menos un flag que justifica la alerta", () => {
+    const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
+    const warnings = mockAlerts().filter((a) => a.severity === "warning")
+    expect(warnings.length).toBeGreaterThan(0)
+    for (const w of warnings) {
+      expect(w.mse_score).toBeLessThanOrEqual(effectiveThreshold(customBySite.get(w.site_id) ?? null))
+      expect(w.unrecognized_device || w.link_degraded, `warning #${w.id}`).toBe(true)
+    }
+  })
+
+  it("ninguna alerta existe sin anomalía, dispositivo no reconocido ni enlace degradado", () => {
+    for (const a of mockAlerts()) {
+      expect(a.anomaly || a.unrecognized_device || a.link_degraded, `alerta #${a.id}`).toBe(true)
+    }
+  })
+
+  it("solo una anomalía puede mitigarse, y nunca con modo informativo o enlace degradado", () => {
+    for (const a of mockAlerts().filter((x) => x.mitigation_applied)) {
+      expect(a.anomaly).toBe(true)
+      expect(a.informative_only_mode).toBe(false)
+      expect(a.link_degraded).toBe(false)
     }
   })
 

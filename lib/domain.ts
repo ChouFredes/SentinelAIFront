@@ -70,8 +70,10 @@ export function deriveAlertState(
   events: MitigationEvent[],
 ): AlertState {
   if (hasActiveQuarantine(alert, activeQuarantines)) return "quarantine_active"
-  if (alert.informative_only_mode) return "informative"
-  if (alert.link_degraded && !alert.mitigation_applied) return "suspended_link"
+  // Informativo / suspendida solo tienen sentido para una anomalía: una advertencia
+  // (sin anomalía) no tenía ninguna respuesta que bloquear ni suspender.
+  if (alert.anomaly && alert.informative_only_mode) return "informative"
+  if (alert.anomaly && alert.link_degraded && !alert.mitigation_applied) return "suspended_link"
   if (alert.mitigation_applied) {
     const t = Date.parse(alert.occurred_at)
     const apply = events.find(
@@ -116,6 +118,23 @@ export function hasActiveQuarantine(
   now = Date.now(),
 ): boolean {
   return findActiveQuarantine(alert, activeQuarantines, now) !== undefined
+}
+
+/**
+ * Por qué existe la alerta, según /ingest: critical (mse ≥ umbral crítico), high
+ * (anomalía: mse > umbral del sitio) o warning (sin anomalía, la alerta existe
+ * solo por dispositivo no reconocido y/o enlace degradado).
+ */
+export function alertReason(
+  alert: Pick<AlertView, "severity" | "unrecognized_device" | "link_degraded">,
+): string {
+  if (alert.severity === "critical") return "MSE ≥ máx(3τ, 3 × umbral del sitio)"
+  if (alert.severity === "high") return "MSE sobre el umbral del sitio"
+  const causes = [
+    alert.unrecognized_device && "dispositivo no reconocido",
+    alert.link_degraded && "enlace degradado",
+  ].filter((c): c is string => typeof c === "string")
+  return `MSE bajo el umbral; alerta por ${causes.length ? causes.join(" y ") : "dispositivo no reconocido / enlace degradado"}`
 }
 
 export type MitigationActor = "Motor" | "Temporizador" | "Administrador"

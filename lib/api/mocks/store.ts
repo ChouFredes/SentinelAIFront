@@ -2,7 +2,7 @@
 // (ver docs/backend-pendiente.md) responden siempre desde acá; el resto solo con
 // SENTINEL_USE_MOCKS=true. PUT config y revert mutan este estado, así que la demo
 // reacciona; en Vercel se reinicia con cada instancia fría.
-import { ipInCidrs, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
+import { ipInCidrs, isPrivateIp, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
 import { QUARANTINE_SECONDS, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import type {
@@ -104,22 +104,31 @@ function initialConfigs(): Map<number, SiteConfigView> {
 }
 
 /**
- * critical desde criticalThreshold (como el backend). El backend no define el
- * nivel intermedio: los mocks usan "high" desde 2 veces el umbral del sitio.
+ * Severidad como en /ingest: critical si mse ≥ criticalThreshold, high si es
+ * anomalía (mse > umbral del sitio) y warning si no hay anomalía (la alerta
+ * existe solo por dispositivo no reconocido o enlace degradado).
  */
 function severityOf(mse: number, customThreshold: number | null): Severity {
   if (mse >= criticalThreshold(customThreshold)) return "critical"
-  if (mse >= 2 * effectiveThreshold(customThreshold)) return "high"
+  if (mse > effectiveThreshold(customThreshold)) return "high"
   return "warning"
 }
 
-/** MSE de una alerta nueva, por tramos para tener una mezcla creíble de severidades (~45/25/30 %). */
-function randomMse(rng: () => number, customThreshold: number | null): number {
+/**
+ * MSE de una alerta nueva. Sin anomalía solo se genera cuando hay un motivo para
+ * que la alerta exista (`warningPossible`: dispositivo no reconocido o enlace
+ * degradado); si no, siempre es anomalía: high (~55 %) o critical.
+ */
+function randomMse(rng: () => number, customThreshold: number | null, warningPossible: boolean): number {
   const threshold = effectiveThreshold(customThreshold)
-  const roll = rng()
-  if (roll < 0.45) return threshold * (1.05 + rng() * 0.9)
-  if (roll < 0.7) return threshold * (2 + rng() * 0.95)
-  return criticalThreshold(customThreshold) * (1 + Math.pow(rng(), 2) * 15)
+  const critical = criticalThreshold(customThreshold)
+  if (warningPossible && rng() < 0.7) return threshold * (0.2 + rng() * 0.8)
+  if (rng() < 0.55) {
+    const lo = threshold * 1.05
+    const hi = critical * 0.98
+    return lo + rng() * (hi - lo)
+  }
+  return critical * (1 + Math.pow(rng(), 2) * 15)
 }
 
 function pick<T>(rng: () => number, list: T[]): T {
@@ -141,21 +150,21 @@ interface NewAlert {
 
 function createAlert(st: Store, a: NewAlert): AlertView {
   const cfg = st.configs.get(a.siteId)!
-  const mse = a.mse ?? randomMse(st.rng, cfg.custom_mse_threshold)
-  const severity = severityOf(mse, cfg.custom_mse_threshold)
+  const custom = cfg.custom_mse_threshold
   const sensorId = a.forceMitigation
     ? SENSORS.find((s) => s.site_id === a.siteId && !s.degraded)!.sensor_id
     : sensorFor(st.rng, a.siteId)
   const sensor = SENSORS.find((s) => s.sensor_id === sensorId)!
-  const isPrivate = a.source.startsWith("192.168.")
+  const isPrivate = isPrivateIp(a.source)
+  const unrecognized = isPrivate && !ipInCidrs(a.source, cfg.known_devices)
   const linkDegraded = !a.forceMitigation && sensor.degraded && st.rng() < 0.35
-  // Una advertencia nunca dispara cuarentena.
+  const mse = a.mse ?? randomMse(st.rng, custom, unrecognized || linkDegraded)
+  const anomaly = mse > effectiveThreshold(custom)
+  const severity = severityOf(mse, custom)
+  // Respuesta activa como en /ingest: solo ante anomalía, con respuesta habilitada y sin
+  // modo informativo ni enlace degradado. Una advertencia nunca dispara cuarentena.
   const mitigated =
-    cfg.active_response_enabled &&
-    !cfg.informative_only_mode &&
-    !linkDegraded &&
-    !isPrivate &&
-    severity !== "warning"
+    anomaly && cfg.active_response_enabled && !cfg.informative_only_mode && !linkDegraded && !isPrivate
   const alert: AlertView = {
     id: st.nextAlertId++,
     site_id: a.siteId,
@@ -165,8 +174,8 @@ function createAlert(st: Store, a: NewAlert): AlertView {
     destination_port: pick(st.rng, DEST_PORTS),
     mse_score: mse,
     severity,
-    anomaly: true,
-    unrecognized_device: isPrivate && !ipInCidrs(a.source, cfg.known_devices),
+    anomaly,
+    unrecognized_device: unrecognized,
     link_degraded: linkDegraded,
     informative_only_mode: cfg.informative_only_mode,
     mitigation_applied: mitigated,
