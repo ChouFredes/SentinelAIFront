@@ -1,7 +1,7 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
-import { AppShell } from '@/components/app-shell'
+import { Providers } from '@/components/providers'
 import './globals.css'
 
 const geistSans = Geist({
@@ -15,10 +15,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'SentinelAI — Consola de operaciones de seguridad',
+  title: 'SentinelAI — Panel de administración',
   description:
-    'Sistema distribuido de detección y prevención de intrusiones (IDPS) para PyMEs. Detección de anomalías de red mediante Autoencoder no supervisado y cuarentena progresiva automatizada.',
-  generator: 'v0.app',
+    'Sistema distribuido de detección y prevención de intrusiones (IDPS) para PyMEs. Detección de anomalías de red mediante Autoencoder no supervisado y cuarentena automatizada.',
 }
 
 export const viewport: Viewport = {
@@ -37,7 +36,7 @@ export default function RootLayout({
       className={`dark bg-background ${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="font-sans antialiased">
-        <AppShell>{children}</AppShell>
+        <Providers>{children}</Providers>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

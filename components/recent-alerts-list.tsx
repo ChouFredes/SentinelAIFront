@@ -10,15 +10,26 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { SeverityBadge } from "@/components/severity-badge"
-import { StatusBadge } from "@/components/status-badge"
-import { RECENT_ALERTS, formatTimestamp } from "@/lib/mock-data"
+import { AlertFlags } from "@/components/alert-flags"
+import { formatMse, formatShortDateTime } from "@/lib/format"
+import type { AlertView } from "@/lib/api/schemas"
 
-export function RecentAlertsList() {
+export function RecentAlertsList({
+  title = "Alertas críticas recientes",
+  description = "Últimas detecciones críticas del motor",
+  alerts,
+  siteName,
+}: {
+  title?: string
+  description?: string
+  alerts: AlertView[]
+  siteName?: (siteId: number) => string | undefined
+}) {
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle>Alertas recientes</CardTitle>
-        <CardDescription>Últimas detecciones del motor</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
         <CardAction>
           <Button variant="outline" size="sm" render={<Link href="/alertas" />}>
             Ver todas
@@ -27,7 +38,10 @@ export function RecentAlertsList() {
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-1">
-        {RECENT_ALERTS.map((alert) => (
+        {alerts.length === 0 && (
+          <p className="py-4 text-sm text-muted-foreground">No hay alertas para mostrar.</p>
+        )}
+        {alerts.map((alert) => (
           <Link
             key={alert.id}
             href={`/alertas/${alert.id}`}
@@ -35,18 +49,19 @@ export function RecentAlertsList() {
           >
             <SeverityBadge severity={alert.severity} />
             <div className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-sm font-medium">
-                {alert.attackType}
+              <span className="truncate font-mono text-sm font-medium">
+                {alert.source_ip}
                 <span className="text-muted-foreground">
-                  {" · "}
-                  {alert.srcIp} → {alert.dstIp}:{alert.port}
+                  {" → "}
+                  {alert.destination_ip}:{alert.destination_port}
                 </span>
               </span>
-              <span className="font-mono text-xs text-muted-foreground">
-                {formatTimestamp(alert.timestamp)} · {alert.id}
+              <span className="truncate text-xs text-muted-foreground">
+                {formatShortDateTime(alert.occurred_at)} · MSE {formatMse(alert.mse_score)}
+                {siteName?.(alert.site_id) ? ` · ${siteName(alert.site_id)}` : ""}
               </span>
             </div>
-            <StatusBadge status={alert.status} className="hidden sm:inline-flex" />
+            <AlertFlags alert={alert} className="hidden sm:flex" />
             <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </Link>
         ))}

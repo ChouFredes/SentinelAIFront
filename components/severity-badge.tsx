@@ -1,19 +1,18 @@
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { SEVERITY_LABEL, type Severity } from "@/lib/mock-data"
+import { SEVERITY_LABEL } from "@/lib/domain"
+import type { Severity } from "@/lib/api/schemas"
 
 const SEVERITY_STYLES: Record<Severity, string> = {
-  critica: "border-critical/30 bg-critical/12 text-critical-foreground",
-  alta: "border-high/30 bg-high/12 text-high-foreground",
-  media: "border-medium/30 bg-medium/12 text-medium-foreground",
-  baja: "border-low/30 bg-low/12 text-low-foreground",
+  critical: "border-critical/30 bg-critical/12 text-critical-foreground",
+  high: "border-high/30 bg-high/12 text-high-foreground",
+  warning: "border-medium/30 bg-medium/12 text-medium-foreground",
 }
 
 const SEVERITY_DOT: Record<Severity, string> = {
-  critica: "bg-critical",
-  alta: "bg-high",
-  media: "bg-medium",
-  baja: "bg-low",
+  critical: "bg-critical",
+  high: "bg-high",
+  warning: "bg-medium",
 }
 
 export function SeverityBadge({

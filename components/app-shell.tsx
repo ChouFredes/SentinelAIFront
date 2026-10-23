@@ -7,11 +7,13 @@ import {
   Shield,
   Gauge,
   ShieldAlert,
-  Server,
-  BrainCircuit,
+  Building2,
+  MonitorSmartphone,
+  Radio,
+  ScrollText,
   Settings,
-  Bell,
   PanelLeft,
+  LogOut,
   X,
 } from "lucide-react"
 
@@ -24,8 +26,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { TimeRangeSelect } from "@/components/time-range-select"
-import { UNREAD_NOTIFICATIONS } from "@/lib/mock-data"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Badge } from "@/components/ui/badge"
+import { SiteSelect } from "@/components/site-select"
+import { useHealth } from "@/lib/api/queries"
+import { logout } from "@/app/(auth)/login/actions"
 
 interface NavItem {
   href: string
@@ -36,17 +46,19 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Resumen", icon: Gauge },
   { href: "/alertas", label: "Alertas", icon: ShieldAlert },
-  { href: "/sensores", label: "Sensores", icon: Server },
-  { href: "/modelo", label: "Modelo", icon: BrainCircuit },
+  { href: "/sitios", label: "Sitios", icon: Building2 },
+  { href: "/dispositivos", label: "Dispositivos", icon: MonitorSmartphone },
+  { href: "/datos-transmitidos", label: "Datos transmitidos", icon: Radio },
+  { href: "/auditoria", label: "Auditoría", icon: ScrollText },
   { href: "/configuracion", label: "Configuración", icon: Settings },
 ]
 
 const PAGE_TITLES: { match: (path: string) => boolean; title: string }[] = [
   { match: (p) => p === "/", title: "Resumen" },
-  { match: (p) => p.startsWith("/alertas"), title: "Alertas" },
-  { match: (p) => p.startsWith("/sensores"), title: "Sensores" },
-  { match: (p) => p.startsWith("/modelo"), title: "Modelo de detección" },
-  { match: (p) => p.startsWith("/configuracion"), title: "Configuración" },
+  ...NAV_ITEMS.filter((n) => n.href !== "/").map((n) => ({
+    match: (p: string) => p === n.href || p.startsWith(`${n.href}/`),
+    title: n.label,
+  })),
 ]
 
 function isActive(pathname: string, href: string): boolean {
@@ -54,18 +66,22 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  mocks = false,
+}: {
+  children: React.ReactNode
+  mocks?: boolean
+}) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = React.useState(false)
-  const [mobileOpen, setMobileOpen] = React.useState(false)
+  // El cajón móvil se cierra solo al cambiar de ruta: guardamos en qué ruta se abrió.
+  const [openedAt, setOpenedAt] = React.useState<string | null>(null)
+  const mobileOpen = openedAt === pathname
+  const setMobileOpen = (open: boolean) => setOpenedAt(open ? pathname : null)
 
   const title =
     PAGE_TITLES.find((p) => p.match(pathname))?.title ?? "SentinelAI"
-
-  // Close the mobile drawer whenever the route changes.
-  React.useEffect(() => {
-    setMobileOpen(false)
-  }, [pathname])
 
   return (
     <TooltipProvider delay={200}>
@@ -84,6 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         pathname={pathname}
         collapsed={collapsed}
         mobileOpen={mobileOpen}
+        mocks={mocks}
         onToggleCollapse={() => setCollapsed((v) => !v)}
         onCloseMobile={() => setMobileOpen(false)}
       />
@@ -91,6 +108,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
           title={title}
+          mocks={mocks}
           onOpenMobile={() => setMobileOpen(true)}
         />
         <main className="flex-1 px-4 py-6 md:px-6 lg:px-8">
@@ -106,12 +124,14 @@ function Sidebar({
   pathname,
   collapsed,
   mobileOpen,
+  mocks,
   onToggleCollapse,
   onCloseMobile,
 }: {
   pathname: string
   collapsed: boolean
   mobileOpen: boolean
+  mocks: boolean
   onToggleCollapse: () => void
   onCloseMobile: () => void
 }) {
@@ -187,22 +207,7 @@ function Sidebar({
 
       {/* Footer: connection pill + collapse toggle */}
       <div className="border-t border-sidebar-border p-2">
-        <div
-          className={cn(
-            "flex items-center gap-2 rounded-md px-2.5 py-2",
-            collapsed ? "justify-center" : "bg-sidebar-accent/40"
-          )}
-        >
-          <span className="relative flex size-2 shrink-0">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-success/70" />
-            <span className="relative inline-flex size-2 rounded-full bg-success" />
-          </span>
-          {!collapsed && (
-            <span className="truncate text-xs text-muted-foreground">
-              Motor SaaS conectado
-            </span>
-          )}
-        </div>
+        <HealthPill collapsed={collapsed} mocks={mocks} />
 
         <Separator className="my-2" />
 
@@ -224,11 +229,43 @@ function Sidebar({
   )
 }
 
+function HealthPill({ collapsed, mocks }: { collapsed: boolean; mocks: boolean }) {
+  const { data, isLoading, isError } = useHealth()
+  const ready = data && data.ml_ready && data.database_ready_at_startup && data.logging_ready
+  const state = isLoading
+    ? { dot: "bg-muted-foreground", ping: false, label: "Verificando backend…" }
+    : isError
+      ? { dot: "bg-critical", ping: false, label: "Backend sin respuesta" }
+      : ready
+        ? { dot: "bg-success", ping: true, label: mocks ? "Backend simulado" : "Backend operativo" }
+        : { dot: "bg-high", ping: false, label: "Backend degradado" }
+  return (
+    <div
+      role="status"
+      title={state.label}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2.5 py-2",
+        collapsed ? "justify-center" : "bg-sidebar-accent/40"
+      )}
+    >
+      <span className="relative flex size-2 shrink-0">
+        {state.ping && (
+          <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-70", state.dot)} />
+        )}
+        <span className={cn("relative inline-flex size-2 rounded-full", state.dot)} />
+      </span>
+      {!collapsed && <span className="truncate text-xs text-muted-foreground">{state.label}</span>}
+    </div>
+  )
+}
+
 function TopBar({
   title,
+  mocks,
   onOpenMobile,
 }: {
   title: string
+  mocks: boolean
   onOpenMobile: () => void
 }) {
   return (
@@ -248,29 +285,32 @@ function TopBar({
       </h1>
 
       <div className="ml-auto flex items-center gap-2 md:gap-3">
-        <TimeRangeSelect />
+        {mocks && (
+          <Badge variant="outline" className="hidden border-medium/30 bg-medium/12 text-medium-foreground sm:inline-flex">
+            Datos simulados
+          </Badge>
+        )}
+        <SiteSelect />
 
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={`Notificaciones, ${UNREAD_NOTIFICATIONS} sin leer`}
-          className="relative"
-        >
-          <Bell />
-          {UNREAD_NOTIFICATIONS > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 flex min-w-4 items-center justify-center rounded-full bg-critical px-1 font-mono text-[10px] leading-4 font-medium text-background tabular-nums">
-              {UNREAD_NOTIFICATIONS}
-            </span>
-          )}
-        </Button>
-
-        <div
-          className="flex size-8 items-center justify-center rounded-full bg-secondary text-xs font-medium text-secondary-foreground"
-          aria-label="Cuenta: Operador NOC"
-          title="Operador NOC"
-        >
-          OP
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Cuenta"
+                className="flex size-8 items-center justify-center rounded-full bg-secondary text-xs font-medium text-secondary-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              />
+            }
+          >
+            AD
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-auto">
+            <DropdownMenuItem onClick={() => void logout()}>
+              <LogOut />
+              Cerrar sesión
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   )
