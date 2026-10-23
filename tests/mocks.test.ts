@@ -23,7 +23,16 @@ import {
   mockUpdateSiteConfig,
   resetMockStore,
 } from "@/lib/api/mocks/store"
-import { QUARANTINE_MATCH_WINDOW_MS as WINDOW, criticalThreshold, effectiveThreshold } from "@/lib/domain"
+import {
+  QUARANTINE_MATCH_WINDOW_MS as WINDOW,
+  criticalThreshold,
+  deriveAlertState,
+  effectiveThreshold,
+  findCoveringApply,
+  findOwnApply,
+  hasActiveQuarantine,
+} from "@/lib/domain"
+import { isPrivateIp, isQuarantinable } from "@/lib/cidr"
 import { BackendError } from "@/lib/server/errors"
 import { computeSummary } from "@/lib/server/summary"
 
@@ -60,16 +69,86 @@ describe("mocks cumplen los esquemas", () => {
     }
   })
 
-  it("cada alerta mitigada tiene su APPLY a ±2 s y viceversa", () => {
+  it("cada APPLY tiene exactamente una alerta mitigada propia a ±2 s", () => {
     const alerts = mockAlerts()
     const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
-    const near = (e: { site_id: number; source_ip: string; occurred_at: string }, a: { site_id: number; source_ip: string; occurred_at: string }) =>
-      e.site_id === a.site_id && e.source_ip === a.source_ip && Math.abs(Date.parse(e.occurred_at) - Date.parse(a.occurred_at)) <= WINDOW
-    for (const a of alerts.filter((x) => x.mitigation_applied)) {
-      expect(applies.filter((e) => near(e, a))).toHaveLength(1)
-    }
     for (const e of applies) {
-      expect(alerts.filter((a) => a.mitigation_applied && near(e, a))).toHaveLength(1)
+      const own = alerts.filter((a) => a.mitigation_applied && a.site_id === e.site_id && a.source_ip === e.source_ip && Math.abs(Date.parse(a.occurred_at) - Date.parse(e.occurred_at)) <= WINDOW)
+      expect(own, `APPLY #${e.id}`).toHaveLength(1)
+    }
+  })
+
+  it("una alerta mitigada tiene su APPLY propio o cae dentro de una cuarentena previa", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    for (const a of mockAlerts().filter((x) => x.mitigation_applied)) {
+      const own = findOwnApply(a, events)
+      const covering = findCoveringApply(a, events)
+      expect(own !== undefined || covering !== undefined, `alerta #${a.id}`).toBe(true)
+      if (own) expect(covering === undefined || covering.id === own.id || Date.parse(covering.occurred_at) < Date.parse(own.occurred_at)).toBe(true)
+    }
+  })
+
+  it("hay alertas repetidas: mitigation_applied=true sin APPLY nuevo, dentro de una cuarentena previa", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const repeated = mockAlerts().filter((a) => a.mitigation_applied && findOwnApply(a, events) === undefined)
+    expect(repeated.length).toBeGreaterThan(0)
+    for (const a of repeated) {
+      const prior = findCoveringApply(a, events)!
+      expect(prior, `alerta #${a.id}`).toBeDefined()
+      expect(prior.source_ip).toBe(a.source_ip) // la regla de iptables es por IP
+      expect(Date.parse(prior.occurred_at)).toBeLessThanOrEqual(Date.parse(a.occurred_at))
+      const reversion = events.find((e) => e.original_event_id === prior.id)
+      if (reversion) expect(Date.parse(a.occurred_at)).toBeLessThan(Date.parse(reversion.occurred_at))
+      // la repetición no generó ningún evento propio
+      expect(events.some((e) => e.source_ip === a.source_ip && e.occurred_at === a.occurred_at)).toBe(false)
+      expect(deriveAlertState(a, [], events)).toBe(prior.site_id === a.site_id ? "blocked_prior_quarantine" : "blocked_other_site")
+    }
+  })
+
+  it("hay repeticiones del mismo sitio y de otro sitio", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const states = mockAlerts().map((a) => deriveAlertState(a, [], events))
+    expect(states).toContain("blocked_prior_quarantine")
+    expect(states).toContain("blocked_other_site")
+  })
+
+  it("una repetición de una cuarentena activa se muestra como bloqueada y sin botón Revertir", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const quarantines = mockQuarantines()
+    const repeated = mockAlerts().filter((a) => a.mitigation_applied && findOwnApply(a, events) === undefined)
+    const inActive = repeated.filter((a) => quarantines.some((q) => q.source_ip === a.source_ip))
+    expect(inActive.length).toBeGreaterThan(0)
+    for (const a of inActive) {
+      expect(hasActiveQuarantine(a, quarantines)).toBe(false)
+      expect(["blocked_prior_quarantine", "blocked_other_site"]).toContain(deriveAlertState(a, quarantines, events))
+    }
+    // y la alerta que originó cada cuarentena sigue siendo la única con botón
+    for (const q of quarantines) {
+      const withButton = mockAlerts().filter((a) => hasActiveQuarantine(a, [q]))
+      expect(withButton).toHaveLength(1)
+    }
+  })
+
+  it("una cuarentena activa de otro sitio bloquea la alerta sin botón Revertir en ese sitio", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const quarantines = mockQuarantines()
+    const crossSite = mockAlerts().filter((a) => {
+      if (!a.mitigation_applied || findOwnApply(a, events)) return false
+      return quarantines.some((q) => q.source_ip === a.source_ip && q.site_id !== a.site_id) && deriveAlertState(a, quarantines, events) === "blocked_other_site"
+    })
+    expect(crossSite.length).toBeGreaterThan(0)
+    for (const a of crossSite) expect(hasActiveQuarantine(a, quarantines)).toBe(false)
+  })
+
+  it("nunca hay dos APPLY solapados para la misma IP, aunque sean de sitios distintos", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const applies = events.filter((e) => e.event_type === "APPLY").sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
+    for (const [i, e] of applies.entries()) {
+      const next = applies.slice(i + 1).find((x) => x.source_ip === e.source_ip)
+      if (!next) continue
+      const reversion = events.find((r) => r.original_event_id === e.id)
+      expect(reversion, `APPLY #${e.id} sin reversión pero hay otro posterior de la misma IP`).toBeDefined()
+      expect(Date.parse(reversion!.occurred_at)).toBeLessThanOrEqual(Date.parse(next.occurred_at))
     }
   })
 
@@ -93,16 +172,52 @@ describe("mocks cumplen los esquemas", () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
-  it("la severidad de cada alerta sale de su MSE y del umbral de su sitio", () => {
+  it("anomaly y severidad siguen la regla de /ingest con el umbral del sitio", () => {
     const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
     for (const a of mockAlerts()) {
       const custom = customBySite.get(a.site_id) ?? null
-      const crit = criticalThreshold(custom)
-      expect(a.mse_score).toBeGreaterThanOrEqual(effectiveThreshold(custom))
-      if (a.severity === "critical") expect(a.mse_score).toBeGreaterThanOrEqual(crit)
-      else expect(a.mse_score).toBeLessThan(crit)
-      if (a.severity === "high") expect(a.mse_score).toBeGreaterThanOrEqual(2 * effectiveThreshold(custom))
-      if (a.severity === "warning") expect(a.mse_score).toBeLessThan(2 * effectiveThreshold(custom))
+      const threshold = effectiveThreshold(custom)
+      expect(a.anomaly, `anomaly #${a.id}`).toBe(a.mse_score > threshold)
+      expect(a.severity === "critical", `critical #${a.id}`).toBe(a.mse_score >= criticalThreshold(custom))
+      expect(a.severity === "high", `high #${a.id}`).toBe(a.anomaly && a.mse_score < criticalThreshold(custom))
+      expect(a.severity === "warning", `warning #${a.id}`).toBe(!a.anomaly)
+    }
+  })
+
+  it("toda warning tiene MSE bajo el umbral y al menos un flag que justifica la alerta", () => {
+    const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
+    const warnings = mockAlerts().filter((a) => a.severity === "warning")
+    expect(warnings.length).toBeGreaterThan(0)
+    for (const w of warnings) {
+      expect(w.mse_score).toBeLessThanOrEqual(effectiveThreshold(customBySite.get(w.site_id) ?? null))
+      expect(w.unrecognized_device || w.link_degraded, `warning #${w.id}`).toBe(true)
+    }
+  })
+
+  it("ninguna alerta existe sin anomalía, dispositivo no reconocido ni enlace degradado", () => {
+    for (const a of mockAlerts()) {
+      expect(a.anomaly || a.unrecognized_device || a.link_degraded, `alerta #${a.id}`).toBe(true)
+    }
+  })
+
+  it("las IP privadas con anomalía también se mitigan, y solo se excluyen las IP protegidas", () => {
+    const mitigated = mockAlerts().filter((a) => a.mitigation_applied)
+    expect(mitigated.some((a) => isPrivateIp(a.source_ip))).toBe(true)
+    expect(mitigated.some((a) => !isPrivateIp(a.source_ip))).toBe(true)
+    expect(mitigated.every((a) => isQuarantinable(a.source_ip))).toBe(true)
+    // Toda anomalía de un sitio con respuesta activa, sin enlace degradado y con IP aislable, se mitiga.
+    const active = new Set(mockSites().filter((s) => s.config.active_response_enabled && !s.config.informative_only_mode).map((s) => s.id))
+    for (const a of mockAlerts()) {
+      const expected = a.anomaly && active.has(a.site_id) && !a.link_degraded && isQuarantinable(a.source_ip)
+      expect(a.mitigation_applied, `alerta #${a.id}`).toBe(expected)
+    }
+  })
+
+  it("solo una anomalía puede mitigarse, y nunca con modo informativo o enlace degradado", () => {
+    for (const a of mockAlerts().filter((x) => x.mitigation_applied)) {
+      expect(a.anomaly).toBe(true)
+      expect(a.informative_only_mode).toBe(false)
+      expect(a.link_degraded).toBe(false)
     }
   })
 

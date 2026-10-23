@@ -131,8 +131,20 @@ export const CIDR_ERROR_MESSAGE: Record<CidrError, string> = {
   limit: `El inventario admite hasta ${MAX_KNOWN_DEVICES} rangos`,
 }
 
-const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "fc00::/7"]
+// Mismas redes que el backend considera internas (RFC1918 y ULA).
+const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 
 export function isPrivateIp(ip: string): boolean {
   return ipInCidrs(ip, PRIVATE_RANGES)
+}
+
+// IPs que el backend nunca aísla con iptables (_quarantine_source_ip): loopback,
+// no especificada, multicast y link-local. Las IP privadas sí se aíslan.
+const PROTECTED_RANGES = ["127.0.0.0/8", "0.0.0.0/32", "224.0.0.0/4", "169.254.0.0/16"]
+
+/** ¿El backend puede aplicar una cuarentena a esta IP de origen? Solo IPv4 y fuera de los rangos protegidos. */
+export function isQuarantinable(ip: string): boolean {
+  const parsed = parseIp(ip)
+  if (!parsed || parsed.version !== 4) return false
+  return !ipInCidrs(ip, PROTECTED_RANGES)
 }

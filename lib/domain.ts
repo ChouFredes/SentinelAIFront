@@ -46,6 +46,8 @@ export type AlertState =
   | "quarantine_active"
   | "reverted_manual"
   | "reverted_timer"
+  | "blocked_prior_quarantine"
+  | "blocked_other_site"
   | "suspended_link"
   | "informative"
   | "detected"
@@ -54,6 +56,8 @@ export const ALERT_STATE_LABEL: Record<AlertState, string> = {
   quarantine_active: "Cuarentena activa",
   reverted_manual: "Revertida (manual)",
   reverted_timer: "Revertida (vencimiento)",
+  blocked_prior_quarantine: "Bloqueada (cuarentena previa)",
+  blocked_other_site: "Bloqueada (cuarentena de otro sitio)",
   suspended_link: "Suspendida: enlace degradado",
   informative: "Informativa",
   detected: "Detectada",
@@ -70,24 +74,59 @@ export function deriveAlertState(
   events: MitigationEvent[],
 ): AlertState {
   if (hasActiveQuarantine(alert, activeQuarantines)) return "quarantine_active"
-  if (alert.informative_only_mode) return "informative"
-  if (alert.link_degraded && !alert.mitigation_applied) return "suspended_link"
+  // Informativo / suspendida solo tienen sentido para una anomalía: una advertencia
+  // (sin anomalía) no tenía ninguna respuesta que bloquear ni suspender.
+  if (alert.anomaly && alert.informative_only_mode) return "informative"
+  if (alert.anomaly && alert.link_degraded && !alert.mitigation_applied) return "suspended_link"
   if (alert.mitigation_applied) {
-    const t = Date.parse(alert.occurred_at)
-    const apply = events.find(
-      (e) =>
-        e.event_type === "APPLY" &&
-        e.site_id === alert.site_id &&
-        e.source_ip === alert.source_ip &&
-        Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
-    )
-    if (apply) {
-      const reversion = events.find((e) => e.original_event_id === apply.id)
+    const own = findOwnApply(alert, events)
+    if (own) {
+      const reversion = events.find((e) => e.original_event_id === own.id)
       if (reversion?.event_type === "MANUAL_REVERSION") return "reverted_manual"
       if (reversion) return "reverted_timer"
+    } else {
+      // El backend deja mitigation_applied=true sin APPLY nuevo cuando la regla ya existía.
+      const covering = findCoveringApply(alert, events)
+      if (covering) {
+        return covering.site_id === alert.site_id ? "blocked_prior_quarantine" : "blocked_other_site"
+      }
     }
   }
   return "detected"
+}
+
+type AlertKey = Pick<AlertView, "site_id" | "source_ip" | "occurred_at">
+
+/** El APPLY que disparó esta alerta: mismo sitio e IP, registrado dentro de la ventana de ±2 s. */
+export function findOwnApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
+  const t = Date.parse(alert.occurred_at)
+  return events.find(
+    (e) =>
+      e.event_type === "APPLY" &&
+      e.site_id === alert.site_id &&
+      e.source_ip === alert.source_ip &&
+      Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
+  )
+}
+
+/**
+ * Un APPLY anterior de esta IP cuya cuarentena seguía en pie cuando ocurrió la
+ * alerta: aplicado antes (o a la vez) y sin reversión todavía. La regla de
+ * iptables es global (por IP, no por sitio), así que si no hay uno del mismo
+ * sitio se busca en cualquier otro; el del mismo sitio tiene prioridad. El
+ * llamador distingue los casos con `apply.site_id !== alert.site_id`.
+ */
+export function findCoveringApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
+  const t = Date.parse(alert.occurred_at)
+  const covers = (apply: MitigationEvent) => {
+    if (apply.event_type !== "APPLY" || apply.source_ip !== alert.source_ip) return false
+    if (Date.parse(apply.occurred_at) > t) return false
+    const reversion = events.find((e) => e.original_event_id === apply.id)
+    return !reversion || t < Date.parse(reversion.occurred_at)
+  }
+  return (
+    events.find((e) => e.site_id === alert.site_id && covers(e)) ?? events.find((e) => e.site_id !== alert.site_id && covers(e))
+  )
 }
 
 /**
@@ -116,6 +155,23 @@ export function hasActiveQuarantine(
   now = Date.now(),
 ): boolean {
   return findActiveQuarantine(alert, activeQuarantines, now) !== undefined
+}
+
+/**
+ * Por qué existe la alerta, según /ingest: critical (mse ≥ umbral crítico), high
+ * (anomalía: mse > umbral del sitio) o warning (sin anomalía, la alerta existe
+ * solo por dispositivo no reconocido y/o enlace degradado).
+ */
+export function alertReason(
+  alert: Pick<AlertView, "severity" | "unrecognized_device" | "link_degraded">,
+): string {
+  if (alert.severity === "critical") return "MSE ≥ máx(3τ, 3 × umbral del sitio)"
+  if (alert.severity === "high") return "MSE sobre el umbral del sitio"
+  const causes = [
+    alert.unrecognized_device && "dispositivo no reconocido",
+    alert.link_degraded && "enlace degradado",
+  ].filter((c): c is string => typeof c === "string")
+  return `MSE bajo el umbral; alerta por ${causes.length ? causes.join(" y ") : "dispositivo no reconocido / enlace degradado"}`
 }
 
 export type MitigationActor = "Motor" | "Temporizador" | "Administrador"

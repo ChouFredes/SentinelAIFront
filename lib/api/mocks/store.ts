@@ -2,7 +2,7 @@
 // (ver docs/backend-pendiente.md) responden siempre desde acá; el resto solo con
 // SENTINEL_USE_MOCKS=true. PUT config y revert mutan este estado, así que la demo
 // reacciona; en Vercel se reinicia con cada instancia fría.
-import { ipInCidrs, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
+import { ipInCidrs, isPrivateIp, isQuarantinable, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
 import { QUARANTINE_SECONDS, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import type {
@@ -104,22 +104,31 @@ function initialConfigs(): Map<number, SiteConfigView> {
 }
 
 /**
- * critical desde criticalThreshold (como el backend). El backend no define el
- * nivel intermedio: los mocks usan "high" desde 2 veces el umbral del sitio.
+ * Severidad como en /ingest: critical si mse ≥ criticalThreshold, high si es
+ * anomalía (mse > umbral del sitio) y warning si no hay anomalía (la alerta
+ * existe solo por dispositivo no reconocido o enlace degradado).
  */
 function severityOf(mse: number, customThreshold: number | null): Severity {
   if (mse >= criticalThreshold(customThreshold)) return "critical"
-  if (mse >= 2 * effectiveThreshold(customThreshold)) return "high"
+  if (mse > effectiveThreshold(customThreshold)) return "high"
   return "warning"
 }
 
-/** MSE de una alerta nueva, por tramos para tener una mezcla creíble de severidades (~45/25/30 %). */
-function randomMse(rng: () => number, customThreshold: number | null): number {
+/**
+ * MSE de una alerta nueva. Sin anomalía solo se genera cuando hay un motivo para
+ * que la alerta exista (`warningPossible`: dispositivo no reconocido o enlace
+ * degradado); si no, siempre es anomalía: high (~55 %) o critical.
+ */
+function randomMse(rng: () => number, customThreshold: number | null, warningPossible: boolean): number {
   const threshold = effectiveThreshold(customThreshold)
-  const roll = rng()
-  if (roll < 0.45) return threshold * (1.05 + rng() * 0.9)
-  if (roll < 0.7) return threshold * (2 + rng() * 0.95)
-  return criticalThreshold(customThreshold) * (1 + Math.pow(rng(), 2) * 15)
+  const critical = criticalThreshold(customThreshold)
+  if (warningPossible && rng() < 0.7) return threshold * (0.2 + rng() * 0.8)
+  if (rng() < 0.55) {
+    const lo = threshold * 1.05
+    const hi = critical * 0.98
+    return lo + rng() * (hi - lo)
+  }
+  return critical * (1 + Math.pow(rng(), 2) * 15)
 }
 
 function pick<T>(rng: () => number, list: T[]): T {
@@ -137,25 +146,32 @@ interface NewAlert {
   source: string
   mse?: number
   forceMitigation?: boolean
+  /** Alerta repetida de una IP en cuarentena: siempre anomalía. */
+  forceAnomaly?: boolean
 }
 
 function createAlert(st: Store, a: NewAlert): AlertView {
   const cfg = st.configs.get(a.siteId)!
-  const mse = a.mse ?? randomMse(st.rng, cfg.custom_mse_threshold)
-  const severity = severityOf(mse, cfg.custom_mse_threshold)
+  const custom = cfg.custom_mse_threshold
   const sensorId = a.forceMitigation
     ? SENSORS.find((s) => s.site_id === a.siteId && !s.degraded)!.sensor_id
     : sensorFor(st.rng, a.siteId)
   const sensor = SENSORS.find((s) => s.sensor_id === sensorId)!
-  const isPrivate = a.source.startsWith("192.168.")
+  const isPrivate = isPrivateIp(a.source)
+  const unrecognized = isPrivate && !ipInCidrs(a.source, cfg.known_devices)
   const linkDegraded = !a.forceMitigation && sensor.degraded && st.rng() < 0.35
-  // Una advertencia nunca dispara cuarentena.
+  const mse = a.mse ?? randomMse(st.rng, custom, !a.forceAnomaly && (unrecognized || linkDegraded))
+  const anomaly = mse > effectiveThreshold(custom)
+  const severity = severityOf(mse, custom)
+  // Respuesta activa como en /ingest: solo ante anomalía, con respuesta habilitada y sin
+  // modo informativo ni enlace degradado. Las IP privadas también se aíslan (solo se
+  // excluyen loopback, multicast, link-local e IPv6). Una advertencia nunca dispara cuarentena.
   const mitigated =
+    anomaly &&
     cfg.active_response_enabled &&
     !cfg.informative_only_mode &&
     !linkDegraded &&
-    !isPrivate &&
-    severity !== "warning"
+    isQuarantinable(a.source)
   const alert: AlertView = {
     id: st.nextAlertId++,
     site_id: a.siteId,
@@ -165,8 +181,8 @@ function createAlert(st: Store, a: NewAlert): AlertView {
     destination_port: pick(st.rng, DEST_PORTS),
     mse_score: mse,
     severity,
-    anomaly: true,
-    unrecognized_device: isPrivate && !ipInCidrs(a.source, cfg.known_devices),
+    anomaly,
+    unrecognized_device: unrecognized,
     link_degraded: linkDegraded,
     informative_only_mode: cfg.informative_only_mode,
     mitigation_applied: mitigated,
@@ -176,16 +192,27 @@ function createAlert(st: Store, a: NewAlert): AlertView {
   return alert
 }
 
+/** Cuándo termina la cuarentena que abrió este APPLY (su reversión o su vencimiento). */
+function quarantineEnd(st: Store, apply: MitigationEvent): number {
+  const reversion = st.events.find((e) => e.original_event_id === apply.id)
+  if (reversion) return Date.parse(reversion.occurred_at)
+  const active = st.quarantines.find((q) => q.apply_event_id === apply.id)
+  return active ? Date.parse(active.expires_at) : -Infinity
+}
+
 function applyMitigation(st: Store, alert: AlertView, now: number): void {
-  const applyAt = Date.parse(alert.occurred_at) + 1000
-  // La IP ya está en cuarentena en este sitio: no se aplica una segunda regla.
-  const alreadyQuarantined = st.quarantines.some(
-    (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > applyAt,
+  const t = Date.parse(alert.occurred_at)
+  // La IP ya estaba en cuarentena: como en /ingest, la regla de iptables existe (es global,
+  // por IP y no por sitio), la alerta queda con mitigation_applied=true y no se registra un APPLY nuevo.
+  const covering = st.events.find(
+    (e) =>
+      e.event_type === "APPLY" &&
+      e.source_ip === alert.source_ip &&
+      Date.parse(e.occurred_at) <= t &&
+      quarantineEnd(st, e) > t,
   )
-  if (alreadyQuarantined) {
-    alert.mitigation_applied = false
-    return
-  }
+  if (covering) return
+  const applyAt = t + 1000
   const apply: MitigationEvent = {
     id: st.nextEventId++,
     site_id: alert.site_id,
@@ -226,11 +253,13 @@ function applyMitigation(st: Store, alert: AlertView, now: number): void {
   })
 }
 
-function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
+function spawnDetection(st: Store, now: number, secondsAgo = 0): AlertView {
   const siteId = pick(st.rng, [1, 3])
   // Siempre por encima del umbral crítico del sitio.
   const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
-  const free = PUBLIC_SOURCES.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
+  // Incluye dos hosts internos (uno fuera del inventario): también se aíslan.
+  const candidates = [...PUBLIC_SOURCES, `192.168.${siteId}.41`, `192.168.${siteId}.66`]
+  const free = candidates.filter((ip) => !st.quarantines.some((q) => q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
     at: now - secondsAgo * 1000,
@@ -240,6 +269,7 @@ function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   })
   if (alert.mitigation_applied) applyMitigation(st, alert, now)
   st.lastSpawnAt = now
+  return alert
 }
 
 function build(now: number): Store {
@@ -253,22 +283,57 @@ function build(now: number): Store {
     lastSpawnAt: now,
     rng: makeRng(20261019),
   }
+  // Alertas repetidas de una IP ya en cuarentena: se intercalan en orden cronológico.
+  const pending: { at: number; siteId: number; source: string }[] = []
+  const record = (siteId: number, at: number, source: string, repeated: boolean) => {
+    const alert = createAlert(st, { siteId, at, source, forceAnomaly: repeated })
+    if (!alert.mitigation_applied) return
+    const events = st.events.length
+    applyMitigation(st, alert, now)
+    if (!repeated && st.events.length > events && st.rng() < 0.3) {
+      // A veces el mismo atacante (IP pública) aparece en el otro sitio con respuesta activa.
+      const otherSite = !isPrivateIp(source) && st.rng() < 0.35
+      pending.push({ at: at + 5_000 + st.rng() * 30_000, siteId: otherSite ? (siteId === 1 ? 3 : 1) : siteId, source })
+    }
+  }
+  const flush = (until: number) => {
+    pending.sort((a, b) => a.at - b.at)
+    while (pending.length > 0 && pending[0].at <= until) {
+      const p = pending.shift()!
+      record(p.siteId, p.at, p.source, true)
+    }
+  }
+
   const times = Array.from({ length: 120 }, () => now - 90_000 - st.rng() * 7 * DAY).sort((a, b) => a - b)
   for (const at of times) {
+    flush(at)
     const siteId = pick(st.rng, [1, 1, 2, 3, 3])
-    const cfg = st.configs.get(siteId)!
     const roll = st.rng()
     let source: string
     if (roll < 0.68) source = pick(st.rng, PUBLIC_SOURCES)
     else if (roll < 0.82) source = `192.168.${siteId}.${pick(st.rng, [3, 14, 22, 30])}`
     else source = `192.168.${siteId}.${pick(st.rng, [41, 66, 87, 150])}`
-    void cfg
-    const alert = createAlert(st, { siteId, at, source })
-    if (alert.mitigation_applied) applyMitigation(st, alert, now)
+    record(siteId, at, source, false)
   }
-  // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva.
-  spawnDetection(st, now, 12)
-  spawnDetection(st, now, 30)
+  flush(Infinity)
+  // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva, y una
+  // repetición de la primera mientras sigue en cuarentena (estado "Bloqueada (cuarentena previa)").
+  const first = spawnDetection(st, now, 12)
+  const second = spawnDetection(st, now, 30)
+  const repeat = (parent: AlertView, siteId: number, secondsAgo: number) => {
+    const repeated = createAlert(st, {
+      siteId,
+      at: now - secondsAgo * 1000,
+      source: parent.source_ip,
+      mse: parent.mse_score * 0.8,
+      forceMitigation: true,
+    })
+    if (repeated.mitigation_applied) applyMitigation(st, repeated, now)
+  }
+  if (first.mitigation_applied) repeat(first, first.site_id, 5)
+  // Y el mismo atacante en el otro sitio con respuesta activa (la regla de iptables es global).
+  const attacker = [first, second].find((a) => a.mitigation_applied && !isPrivateIp(a.source_ip))
+  if (attacker) repeat(attacker, attacker.site_id === 1 ? 3 : 1, 3)
   return st
 }
 

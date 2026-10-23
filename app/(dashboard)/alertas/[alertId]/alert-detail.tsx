@@ -23,11 +23,13 @@ import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSe
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
   MITIGATION_REASON_LABEL,
-  QUARANTINE_MATCH_WINDOW_MS,
   QUARANTINE_SECONDS,
   TAU,
+  alertReason,
   deriveAlertState,
   findActiveQuarantine,
+  findCoveringApply,
+  findOwnApply,
   mitigationActor,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
@@ -40,24 +42,54 @@ interface HistoryRow {
   reason: string
 }
 
-function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[] {
-  const t = Date.parse(alert.occurred_at)
+function buildHistory(
+  alert: AlertView,
+  events: MitigationEvent[],
+  siteName: (siteId: number) => string,
+): HistoryRow[] {
   const rows: HistoryRow[] = [
     {
       key: "alert",
       at: alert.occurred_at,
       event: `Alerta registrada (${alert.severity === "critical" ? "crítica" : alert.severity === "high" ? "alta" : "advertencia"})`,
       actor: "Motor",
-      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, 3 × umbral del sitio)" : "MSE ≥ umbral del sitio",
+      reason: alertReason(alert),
     },
   ]
-  const apply = events.find(
-    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
-  )
+  const apply = findOwnApply(alert, events)
   if (!apply) {
-    if (alert.informative_only_mode) {
+    const prior = alert.mitigation_applied ? findCoveringApply(alert, events) : undefined
+    if (prior) {
+      // Repetición dentro de una cuarentena: el backend no aplica una regla nueva.
+      rows.push({
+        key: "prior",
+        at: alert.occurred_at,
+        event:
+          prior.site_id === alert.site_id
+            ? `Sin APPLY nuevo: la IP ya estaba en cuarentena (APPLY #${prior.id})`
+            : `Sin APPLY nuevo: la IP ya estaba en cuarentena por ${siteName(prior.site_id)} (APPLY #${prior.id})`,
+        actor: "Motor",
+        reason:
+          prior.site_id === alert.site_id
+            ? "la regla de iptables ya existía"
+            : "la regla de iptables es global y ya existía",
+      })
+      for (const e of events
+        .filter((x) => x.original_event_id === prior.id)
+        .sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at))) {
+        rows.push({
+          key: `e${e.id}`,
+          at: e.occurred_at,
+          event: `${e.event_type} (referencia al APPLY #${prior.id})`,
+          actor: mitigationActor(e),
+          reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+        })
+      }
+      return rows
+    }
+    if (alert.anomaly && alert.informative_only_mode) {
       rows.push({ key: "none", at: alert.occurred_at, event: "Sin acción de red", actor: "Motor", reason: "modo informativo" })
-    } else if (alert.link_degraded) {
+    } else if (alert.anomaly && alert.link_degraded) {
       rows.push({ key: "none", at: alert.occurred_at, event: "Sin acción de red", actor: "Motor", reason: "enlace degradado: respuesta suspendida" })
     }
     return rows
@@ -101,7 +133,8 @@ export function AlertDetail({ alertId }: { alertId: number }) {
   const config = useSiteConfig(alert?.site_id)
   const sensors = useSiteSensors(alert?.site_id)
   const quarantines = useQuarantines(alert?.site_id)
-  const events = useMitigationEvents({ site_id: alert?.site_id, source_ip: alert?.source_ip, limit: 200 }, !!alert)
+  // Por IP y sin filtro de sitio: la cuarentena que bloquea esta alerta puede ser de otro sitio.
+  const events = useMitigationEvents({ source_ip: alert?.source_ip, limit: 200 }, !!alert)
 
   if (alertQuery.isError && alertQuery.error instanceof ApiError && alertQuery.error.status === 404) {
     return (
@@ -115,7 +148,8 @@ export function AlertDetail({ alertId }: { alertId: number }) {
     )
   }
 
-  const siteName = alert ? (sites.find((s) => s.id === alert.site_id)?.name ?? `Sitio ${alert.site_id}`) : ""
+  const siteNameOf = (id: number) => sites.find((s) => s.id === id)?.name ?? `Sitio ${id}`
+  const siteName = alert ? siteNameOf(alert.site_id) : ""
   const sensorName = alert ? (sensors.data?.find((s) => s.sensor_id === alert.sensor_id)?.name ?? `sensor ${alert.sensor_id}`) : ""
   const threshold = config.data?.custom_mse_threshold ?? TAU
   const quarantine = alert ? findActiveQuarantine(alert, quarantines.data ?? [], now) : undefined
@@ -204,6 +238,17 @@ export function AlertDetail({ alertId }: { alertId: number }) {
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     Estado: <AlertStateBadge state={state} />
                   </div>
+                  {state === "blocked_other_site" && (
+                    <p className="text-sm text-muted-foreground">
+                      Esta alerta no generó una regla nueva: la IP ya estaba en cuarentena por una alerta de otro sitio
+                      (la regla de iptables es global).
+                    </p>
+                  )}
+                  {state === "blocked_prior_quarantine" && (
+                    <p className="text-sm text-muted-foreground">
+                      Esta alerta no generó una regla nueva: la IP ya estaba en cuarentena por una alerta anterior.
+                    </p>
+                  )}
                   {quarantine && (
                     <div className="flex flex-col gap-3">
                       <p className="text-sm">
@@ -247,7 +292,7 @@ export function AlertDetail({ alertId }: { alertId: number }) {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {buildHistory(alert, events.data ?? []).map((r) => (
+                        {buildHistory(alert, events.data ?? [], siteNameOf).map((r) => (
                           <TableRow key={r.key}>
                             <TableCell className="font-mono text-xs whitespace-nowrap">{formatTime(r.at)}</TableCell>
                             <TableCell>{r.event}</TableCell>

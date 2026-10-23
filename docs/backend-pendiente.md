@@ -38,9 +38,14 @@ El front las dibuja **deshabilitadas con badge "pendiente"** (`components/pendin
 - **Destinatarios de notificaciones por severidad** (RF-08, wf3): sin definir en el backend.
 - **Estado de la alerta** (wf1: "Cuarentena activa", "Revertida (manual)", "Suspendida: enlace degradado"): no es un campo; el front lo deriva de los flags de `AlertView`, las cuarentenas activas y `mitigation_events` (`lib/domain.ts → deriveAlertState`).
 
-## Severidades
+## Severidades y mitigación (semántica de `/ingest`, rama 75)
 
-El backend tiene tres (`warning`, `high`, `critical`); el panel las muestra como Advertencia / Alta / Crítica. Los wireframes dibujan cuatro (Media/Baja); no se inventa un nivel que el backend no emite.
+El backend tiene tres severidades (`warning`, `high`, `critical`); el panel las muestra como Advertencia / Alta / Crítica. Los wireframes dibujan cuatro (Media/Baja); no se inventa un nivel que el backend no emite.
+
+- `anomaly = mse > umbral del sitio` (`custom_mse_threshold` o τ).
+- `critical` si `mse ≥ max(3τ, 3 × umbral del sitio)`; `high` si es anomalía no crítica; `warning` si **no** es anomalía y la alerta existe solo por `unrecognized_device` o `link_degraded`.
+- Hay respuesta activa solo ante anomalía, con `active_response_enabled` y sin modo informativo ni enlace degradado. Se aíslan también las IP privadas; solo se excluyen IPv6, loopback, no especificada, multicast y link-local.
+- La regla de iptables es global (por IP, no por sitio). Si la IP ya estaba aislada, la alerta queda con `mitigation_applied=true` **sin** APPLY nuevo, aunque la cuarentena la haya abierto otro sitio. El panel la muestra como "Bloqueada (cuarentena previa)" (cuarentena del mismo sitio) o "Bloqueada (cuarentena de otro sitio)", sin botón Revertir: la cuarentena se revierte desde la alerta que la originó.
 
 ## Despliegue
 

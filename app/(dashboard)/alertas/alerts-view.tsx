@@ -46,11 +46,21 @@ const PERIODS = [
   { value: "all", label: "Todo el historial", hours: 0 },
 ]
 
-type StateFilter = "all" | "quarantine_active" | "reverted" | "informative" | "suspended_link" | "detected"
+type StateFilter =
+  | "all"
+  | "quarantine_active"
+  | "blocked_prior_quarantine"
+  | "blocked_other_site"
+  | "reverted"
+  | "informative"
+  | "suspended_link"
+  | "detected"
 
 const STATE_FILTERS: { value: StateFilter; label: string }[] = [
   { value: "all", label: "Estado: todos" },
   { value: "quarantine_active", label: ALERT_STATE_LABEL.quarantine_active },
+  { value: "blocked_prior_quarantine", label: ALERT_STATE_LABEL.blocked_prior_quarantine },
+  { value: "blocked_other_site", label: ALERT_STATE_LABEL.blocked_other_site },
   { value: "reverted", label: "Revertida" },
   { value: "informative", label: ALERT_STATE_LABEL.informative },
   { value: "suspended_link", label: ALERT_STATE_LABEL.suspended_link },
@@ -120,7 +130,8 @@ export function AlertsView() {
     limit: PAGE_SIZE,
   })
   const quarantines = useQuarantines(siteId)
-  const events = useMitigationEvents({ site_id: siteId, limit: 1000 })
+  // Sin filtro de sitio: la regla de iptables es global y una alerta puede estar bloqueada por la cuarentena de otro sitio.
+  const events = useMitigationEvents({ limit: 1000 })
 
   const siteName = React.useCallback((id: number) => sites.find((s) => s.id === id)?.name ?? `Sitio ${id}`, [sites])
   const thresholdOf = React.useCallback(
@@ -201,7 +212,7 @@ export function AlertsView() {
         />
         <SimpleSelect
           ariaLabel="Filtrar por estado"
-          className="w-52"
+          className="w-64"
           value={stateFilter}
           onValueChange={(v) => setParam("estado", v)}
           options={STATE_FILTERS}

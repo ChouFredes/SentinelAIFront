@@ -24,7 +24,7 @@ export function ScoreBar({
   const pct = Math.min((score / max) * 100, 100)
   const tauPct = (threshold / max) * 100
   const criticalPct = (critical / max) * 100
-  const above = score >= threshold
+  const above = score > threshold
 
   return (
     <div

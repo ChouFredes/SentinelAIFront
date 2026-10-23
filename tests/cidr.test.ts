@@ -3,6 +3,8 @@ import {
   hostCidr,
   ipInCidr,
   ipInCidrs,
+  isPrivateIp,
+  isQuarantinable,
   isValidCidr,
   normalizeCidr,
   validateNewCidr,
@@ -55,5 +57,39 @@ describe("cidr", () => {
     expect(validateNewCidr("10.0.0.0/8", ["192.168.2.0/27"])).toBeNull()
     const full = Array.from({ length: 512 }, (_, i) => `10.${i >> 8}.${i & 255}.0/24`)
     expect(validateNewCidr("172.16.0.0/12", full)).toBe("limit")
+  })
+})
+
+describe("isQuarantinable", () => {
+  it("las IP públicas y las privadas se pueden aislar", () => {
+    for (const ip of ["203.0.113.45", "8.8.8.8", "192.168.1.66", "10.0.4.18", "172.16.5.9", "100.64.0.1"]) {
+      expect(isQuarantinable(ip), ip).toBe(true)
+    }
+  })
+
+  it("loopback, no especificada, multicast y link-local se rechazan", () => {
+    for (const ip of ["127.0.0.1", "127.255.255.254", "0.0.0.0", "224.0.0.1", "239.255.255.250", "169.254.1.1"]) {
+      expect(isQuarantinable(ip), ip).toBe(false)
+    }
+  })
+
+  it("IPv6 y texto que no es IP se rechazan", () => {
+    for (const ip of ["::1", "2001:db8::1", "fe80::1", "fc00::1", "nope", "", "999.1.1.1"]) {
+      expect(isQuarantinable(ip), ip).toBe(false)
+    }
+  })
+
+  it("los bordes de los rangos protegidos", () => {
+    expect(isQuarantinable("223.255.255.255")).toBe(true)
+    expect(isQuarantinable("169.253.255.255")).toBe(true)
+    expect(isQuarantinable("169.255.0.0")).toBe(true)
+    expect(isQuarantinable("0.0.0.1")).toBe(true)
+  })
+})
+
+describe("isPrivateIp", () => {
+  it("usa las redes internas del backend: RFC1918 y ULA", () => {
+    for (const ip of ["10.1.2.3", "172.31.255.1", "192.168.3.41", "fc00::1", "fd12:3456::1"]) expect(isPrivateIp(ip), ip).toBe(true)
+    for (const ip of ["8.8.8.8", "172.32.0.1", "127.0.0.1", "169.254.1.1", "2001:db8::1"]) expect(isPrivateIp(ip), ip).toBe(false)
   })
 })
