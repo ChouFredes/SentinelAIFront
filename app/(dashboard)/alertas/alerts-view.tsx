@@ -209,7 +209,7 @@ export function AlertsView() {
         />
         <SimpleSelect
           ariaLabel="Filtrar por estado"
-          className="w-52"
+          className="w-64"
           value={stateFilter}
           onValueChange={(v) => setParam("estado", v)}
           options={STATE_FILTERS}
