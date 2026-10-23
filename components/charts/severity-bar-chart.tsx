@@ -7,29 +7,26 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart"
-import { ALERTS, SEVERITY_LABEL, type Severity } from "@/lib/mock-data"
-
-const ORDER: Severity[] = ["critica", "alta", "media", "baja"]
+import { SEVERITY_LABEL, SEVERITY_ORDER } from "@/lib/domain"
+import type { Severity } from "@/lib/api/schemas"
 
 const SEVERITY_COLOR: Record<Severity, string> = {
-  critica: "var(--critical)",
-  alta: "var(--high)",
-  media: "var(--medium)",
-  baja: "var(--low)",
+  critical: "var(--critical)",
+  high: "var(--high)",
+  warning: "var(--medium)",
 }
-
-const data = ORDER.map((severity) => ({
-  severity,
-  label: SEVERITY_LABEL[severity],
-  count: ALERTS.filter((a) => a.severity === severity).length,
-  fill: SEVERITY_COLOR[severity],
-}))
 
 const config = {
   count: { label: "Alertas" },
 } satisfies ChartConfig
 
-export function SeverityBarChart() {
+export function SeverityBarChart({ counts }: { counts: Record<Severity, number> }) {
+  const data = SEVERITY_ORDER.map((severity) => ({
+    severity,
+    label: SEVERITY_LABEL[severity],
+    count: counts[severity],
+    fill: SEVERITY_COLOR[severity],
+  }))
   return (
     <ChartContainer config={config} className="h-[260px] w-full">
       <BarChart
@@ -44,7 +41,7 @@ export function SeverityBarChart() {
           dataKey="label"
           tickLine={false}
           axisLine={false}
-          width={64}
+          width={84}
           className="text-[12px]"
         />
         <ChartTooltip

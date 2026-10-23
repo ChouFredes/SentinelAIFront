@@ -1,49 +1,33 @@
-import { ArrowUp, ArrowDown } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { cn } from "@/lib/utils"
-import type { MetricCard as MetricCardData } from "@/lib/mock-data"
+import { Skeleton } from "@/components/ui/skeleton"
 
-export function MetricCard({ metric }: { metric: MetricCardData }) {
-  const { deltaPct, higherIsBetter } = metric
-  const isUp = deltaPct > 0
-  const isFlat = deltaPct === 0
-  // A change is "good" when its direction matches higherIsBetter.
-  const isGood = isFlat ? true : isUp === higherIsBetter
-
+export function MetricCard({
+  label,
+  value,
+  hint,
+  loading,
+}: {
+  label: string
+  value: string
+  hint?: string
+  loading?: boolean
+}) {
   return (
     <Card>
       <CardHeader className="pb-0">
         <CardTitle className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          {metric.label}
+          {label}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex items-end justify-between gap-2">
-        <span className="font-mono text-3xl leading-none font-semibold tracking-tight tabular-nums">
-          {metric.value}
-        </span>
-        <span
-          className={cn(
-            "flex items-center gap-0.5 font-mono text-xs tabular-nums",
-            isFlat
-              ? "text-muted-foreground"
-              : isGood
-                ? "text-success-foreground"
-                : "text-high-foreground"
-          )}
-        >
-          {!isFlat &&
-            (isUp ? (
-              <ArrowUp className="size-3.5" />
-            ) : (
-              <ArrowDown className="size-3.5" />
-            ))}
-          {isFlat ? "0%" : `${isUp ? "+" : ""}${deltaPct}%`}
-          <span className="sr-only">
-            {isFlat
-              ? "sin cambios respecto al período anterior"
-              : `${isUp ? "aumento" : "disminución"} respecto al período anterior`}
+      <CardContent className="flex flex-col gap-1">
+        {loading ? (
+          <Skeleton className="h-8 w-20" />
+        ) : (
+          <span className="font-mono text-3xl leading-none font-semibold tracking-tight tabular-nums">
+            {value}
           </span>
-        </span>
+        )}
+        {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
       </CardContent>
     </Card>
   )
