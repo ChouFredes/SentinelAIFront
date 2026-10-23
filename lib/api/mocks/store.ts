@@ -139,12 +139,13 @@ function createAlert(st: Store, a: NewAlert): AlertView {
   const sensor = SENSORS.find((s) => s.sensor_id === sensorId)!
   const isPrivate = a.source.startsWith("192.168.")
   const linkDegraded = !a.forceMitigation && sensor.degraded && st.rng() < 0.35
+  // Una advertencia nunca dispara cuarentena.
   const mitigated =
     cfg.active_response_enabled &&
     !cfg.informative_only_mode &&
     !linkDegraded &&
     !isPrivate &&
-    (a.forceMitigation || severity !== "warning")
+    severity !== "warning"
   const alert: AlertView = {
     id: st.nextAlertId++,
     site_id: a.siteId,
@@ -167,6 +168,14 @@ function createAlert(st: Store, a: NewAlert): AlertView {
 
 function applyMitigation(st: Store, alert: AlertView, now: number): void {
   const applyAt = Date.parse(alert.occurred_at) + 1000
+  // La IP ya está en cuarentena en este sitio: no se aplica una segunda regla.
+  const alreadyQuarantined = st.quarantines.some(
+    (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > applyAt,
+  )
+  if (alreadyQuarantined) {
+    alert.mitigation_applied = false
+    return
+  }
   const apply: MitigationEvent = {
     id: st.nextEventId++,
     site_id: alert.site_id,
@@ -210,10 +219,11 @@ function applyMitigation(st: Store, alert: AlertView, now: number): void {
 function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   const siteId = pick(st.rng, [1, 3])
   const mse = 0.004 + st.rng() * 0.02
+  const free = PUBLIC_SOURCES.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
     at: now - secondsAgo * 1000,
-    source: pick(st.rng, PUBLIC_SOURCES),
+    source: pick(st.rng, free),
     mse,
     forceMitigation: true,
   })

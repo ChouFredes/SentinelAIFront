@@ -12,6 +12,11 @@ export const TAU = 0.000308
 export const QUARANTINE_SECONDS = 60
 /** Una alerta es critical cuando MSE ≥ max(3τ, piso). */
 export const CRITICAL_FACTOR = 3
+/**
+ * Una alerta y la cuarentena (o el APPLY) que disparó se registran casi en el
+ * mismo instante; fuera de esta ventana son hechos distintos de la misma IP.
+ */
+export const QUARANTINE_MATCH_WINDOW_MS = 2_000
 
 export function effectiveThreshold(customMseThreshold: number | null | undefined): number {
   return customMseThreshold ?? TAU
@@ -70,7 +75,7 @@ export function deriveAlertState(
         e.event_type === "APPLY" &&
         e.site_id === alert.site_id &&
         e.source_ip === alert.source_ip &&
-        Math.abs(Date.parse(e.occurred_at) - t) <= 5_000,
+        Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
     )
     if (apply) {
       const reversion = events.find((e) => e.original_event_id === apply.id)
@@ -81,17 +86,32 @@ export function deriveAlertState(
   return "detected"
 }
 
-export function hasActiveQuarantine(
-  alert: Pick<AlertView, "site_id" | "source_ip">,
+/**
+ * La cuarentena vigente que originó esta alerta: mismo sitio e IP de origen,
+ * registrada dentro de la ventana de la alerta y todavía sin vencer. Una alerta
+ * anterior de una IP que hoy está en cuarentena no cuenta.
+ */
+export function findActiveQuarantine(
+  alert: Pick<AlertView, "site_id" | "source_ip" | "occurred_at">,
   activeQuarantines: AdminQuarantineView[],
   now = Date.now(),
-): boolean {
-  return activeQuarantines.some(
+): AdminQuarantineView | undefined {
+  const t = Date.parse(alert.occurred_at)
+  return activeQuarantines.find(
     (q) =>
       q.site_id === alert.site_id &&
       q.source_ip === alert.source_ip &&
+      Math.abs(Date.parse(q.quarantined_at) - t) <= QUARANTINE_MATCH_WINDOW_MS &&
       Date.parse(q.expires_at) > now,
   )
+}
+
+export function hasActiveQuarantine(
+  alert: Pick<AlertView, "site_id" | "source_ip" | "occurred_at">,
+  activeQuarantines: AdminQuarantineView[],
+  now = Date.now(),
+): boolean {
+  return findActiveQuarantine(alert, activeQuarantines, now) !== undefined
 }
 
 export type MitigationActor = "Motor" | "Temporizador" | "Administrador"

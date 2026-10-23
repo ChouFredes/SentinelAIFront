@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   HEARTBEAT_TIMEOUT_MS,
+  QUARANTINE_MATCH_WINDOW_MS,
   deriveAlertState,
+  findActiveQuarantine,
   hasActiveQuarantine,
   latestSensorActivity,
   parseThreshold,
@@ -53,6 +55,48 @@ const quarantine = (over: Partial<AdminQuarantineView> = {}): AdminQuarantineVie
   quarantined_at: "2026-10-19T17:10:33.000Z",
   expires_at: new Date(Date.now() + 30_000).toISOString(),
   ...over,
+})
+
+describe("findActiveQuarantine", () => {
+  const T = Date.parse(T0)
+  const at = (offsetMs: number) => new Date(T + offsetMs).toISOString()
+
+  it("empareja la alerta con su cuarentena dentro de ±2 s", () => {
+    for (const offset of [-QUARANTINE_MATCH_WINDOW_MS, 0, 1_000, QUARANTINE_MATCH_WINDOW_MS]) {
+      const q = quarantine({ quarantined_at: at(offset) })
+      expect(findActiveQuarantine(alert(), [q])).toBe(q)
+    }
+  })
+
+  it("fuera de la ventana de 2 s no es la cuarentena de esa alerta", () => {
+    for (const offset of [-(QUARANTINE_MATCH_WINDOW_MS + 1), QUARANTINE_MATCH_WINDOW_MS + 1, 10_000, 60_000]) {
+      expect(hasActiveQuarantine(alert(), [quarantine({ quarantined_at: at(offset) })])).toBe(false)
+    }
+  })
+
+  it("una alerta vieja de una IP hoy en cuarentena no tiene cuarentena activa", () => {
+    const old = alert({ id: 7, occurred_at: "2026-10-18T09:00:00.000Z" })
+    const current = quarantine()
+    expect(hasActiveQuarantine(old, [current])).toBe(false)
+    expect(deriveAlertState(old, [current], [])).not.toBe("quarantine_active")
+    expect(deriveAlertState(alert(), [current], [])).toBe("quarantine_active")
+  })
+
+  it("exige mismo sitio e IP de origen", () => {
+    expect(hasActiveQuarantine(alert(), [quarantine({ site_id: 2 })])).toBe(false)
+    expect(hasActiveQuarantine(alert(), [quarantine({ source_ip: "198.51.100.7" })])).toBe(false)
+  })
+
+  it("no cuenta si ya venció", () => {
+    const expired = quarantine({ expires_at: new Date(Date.now() - 1).toISOString() })
+    expect(findActiveQuarantine(alert(), [expired])).toBeUndefined()
+  })
+
+  it("elige la cuarentena correcta entre varias de la misma IP", () => {
+    const other = quarantine({ quarantined_at: at(30_000) })
+    const mine = quarantine({ quarantined_at: at(500) })
+    expect(findActiveQuarantine(alert(), [other, mine])).toBe(mine)
+  })
 })
 
 describe("deriveAlertState", () => {

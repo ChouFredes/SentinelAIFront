@@ -25,13 +25,14 @@ import { SeverityBadge } from "@/components/severity-badge"
 import { SimpleSelect } from "@/components/simple-select"
 import { useSite } from "@/components/site-provider"
 import { useAlerts, useMitigationEvents, useQuarantines } from "@/lib/api/queries"
-import { severitySchema, type AlertView, type Severity } from "@/lib/api/schemas"
+import { severitySchema, type Severity } from "@/lib/api/schemas"
 import { downloadFile, toCsv } from "@/lib/csv"
 import {
   ALERT_STATE_LABEL,
   SEVERITY_LABEL,
   TAU,
   deriveAlertState,
+  findActiveQuarantine,
   type AlertState,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatShortDateTime } from "@/lib/format"
@@ -136,12 +137,6 @@ export function AlertsView() {
     // `now` fuerza el recálculo cuando una cuarentena vence entre refrescos.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alerts.data, quarantines.data, events.data, stateFilter, now])
-
-  function activeQuarantine(alert: AlertView) {
-    return (quarantines.data ?? []).find(
-      (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > now,
-    )
-  }
 
   function exportCsv() {
     const csv = toCsv(
@@ -256,7 +251,7 @@ export function AlertsView() {
                 </TableRow>
               )}
               {rows.map(({ alert, state }) => {
-                const q = activeQuarantine(alert)
+                const q = findActiveQuarantine(alert, quarantines.data ?? [], now)
                 return (
                   <TableRow key={alert.id}>
                     <TableCell>

@@ -23,9 +23,11 @@ import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSe
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
   MITIGATION_REASON_LABEL,
+  QUARANTINE_MATCH_WINDOW_MS,
   QUARANTINE_SECONDS,
   TAU,
   deriveAlertState,
+  findActiveQuarantine,
   mitigationActor,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
@@ -50,7 +52,7 @@ function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[]
     },
   ]
   const apply = events.find(
-    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= 5_000,
+    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
   )
   if (!apply) {
     if (alert.informative_only_mode) {
@@ -116,11 +118,7 @@ export function AlertDetail({ alertId }: { alertId: number }) {
   const siteName = alert ? (sites.find((s) => s.id === alert.site_id)?.name ?? `Sitio ${alert.site_id}`) : ""
   const sensorName = alert ? (sensors.data?.find((s) => s.sensor_id === alert.sensor_id)?.name ?? `sensor ${alert.sensor_id}`) : ""
   const threshold = config.data?.custom_mse_threshold ?? TAU
-  const quarantine = alert
-    ? quarantines.data?.find(
-        (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > now,
-      )
-    : undefined
+  const quarantine = alert ? findActiveQuarantine(alert, quarantines.data ?? [], now) : undefined
   const state = alert ? deriveAlertState(alert, quarantines.data ?? [], events.data ?? []) : undefined
 
   return (
