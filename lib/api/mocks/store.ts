@@ -31,7 +31,8 @@ const SITES = [
 
 const SENSORS = [
   { sensor_id: 7, site_id: 1, name: "SN-0007", heartbeatAgo: 12, ingestAgo: 4, flows: 482_113, degraded: false },
-  { sensor_id: 12, site_id: 2, name: "SN-0012", heartbeatAgo: 20, ingestAgo: 9, flows: 233_870, degraded: false },
+  // Sin heartbeat: como el sensor Edge, que solo envía flujos.
+  { sensor_id: 12, site_id: 2, name: "SN-0012", heartbeatAgo: null, ingestAgo: 9, flows: 233_870, degraded: false },
   { sensor_id: 21, site_id: 3, name: "SN-0021", heartbeatAgo: 8, ingestAgo: 3, flows: 310_552, degraded: false },
   { sensor_id: 22, site_id: 3, name: "SN-0022", heartbeatAgo: 31, ingestAgo: 17, flows: 98_240, degraded: true },
 ]
@@ -321,11 +322,11 @@ export function mockTelemetry(sensorId: number, now = Date.now()): SensorTelemet
     sensor_id: s.sensor_id,
     site_id: s.site_id,
     is_active: true,
-    last_heartbeat_at: iso(now - s.heartbeatAgo * 1000),
+    last_heartbeat_at: s.heartbeatAgo === null ? null : iso(now - s.heartbeatAgo * 1000),
     last_ingest_at: iso(now - s.ingestAgo * 1000),
     flow_count: s.flows,
     last_link_degraded: s.degraded,
-    last_link_report_at: iso(now - s.heartbeatAgo * 1000),
+    last_link_report_at: iso(now - (s.heartbeatAgo ?? s.ingestAgo) * 1000),
   }
 }
 

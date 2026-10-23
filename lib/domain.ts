@@ -4,6 +4,7 @@ import type {
   MitigationEvent,
   Severity,
 } from "@/lib/api/schemas"
+import { parseIso } from "@/lib/format"
 
 /** τ: umbral MSE global. */
 export const TAU = 0.000308
@@ -133,15 +134,35 @@ export const SENSOR_STATUS_LABEL: Record<SensorStatus, string> = {
   offline: "Sin conexión",
 }
 
-/** Sin latido en 2 minutos = sin conexión. */
+/** Sin actividad (latido o envío de flujos) en 2 minutos = sin conexión. */
 export const HEARTBEAT_TIMEOUT_MS = 120_000
 
+/**
+ * Última vez que el sensor dio señales de vida: la fecha más reciente entre el
+ * latido y el último envío de flujos. El sensor Edge no llama a /heartbeat,
+ * así que mirar solo el latido lo daría por caído.
+ */
+export function latestSensorActivity(s: {
+  last_heartbeat_at: string | null
+  last_ingest_at: string | null
+}): string | null {
+  const dates = [s.last_heartbeat_at, s.last_ingest_at].filter((d): d is string => d !== null)
+  if (dates.length === 0) return null
+  return dates.reduce((a, b) => (parseIso(b).getTime() > parseIso(a).getTime() ? b : a))
+}
+
 export function sensorStatus(
-  s: { is_active: boolean; last_heartbeat_at: string | null; last_link_degraded: boolean },
+  s: {
+    is_active: boolean
+    last_heartbeat_at: string | null
+    last_ingest_at: string | null
+    last_link_degraded: boolean
+  },
   now = Date.now(),
 ): SensorStatus {
-  if (!s.is_active || !s.last_heartbeat_at) return "offline"
-  if (now - Date.parse(s.last_heartbeat_at) > HEARTBEAT_TIMEOUT_MS) return "offline"
+  const last = latestSensorActivity(s)
+  if (!s.is_active || last === null) return "offline"
+  if (now - parseIso(last).getTime() > HEARTBEAT_TIMEOUT_MS) return "offline"
   return s.last_link_degraded ? "link_degraded" : "online"
 }
 

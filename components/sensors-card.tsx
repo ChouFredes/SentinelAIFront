@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { useNow } from "@/components/countdown"
 import { cn } from "@/lib/utils"
-import { SENSOR_STATUS_LABEL, sensorStatus, type SensorStatus } from "@/lib/domain"
+import { SENSOR_STATUS_LABEL, latestSensorActivity, sensorStatus, type SensorStatus } from "@/lib/domain"
 import { formatInt, formatRelative } from "@/lib/format"
 import type { SiteSensorView } from "@/lib/api/schemas"
 
@@ -50,7 +50,7 @@ export function SensorsCard({
                   )}
                 </span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {s.last_heartbeat_at ? `Último latido ${formatRelative(s.last_heartbeat_at)}` : "Sin latidos"} ·{" "}
+                  {latestSensorActivity(s) ? `Última actividad ${formatRelative(latestSensorActivity(s)!)}` : "Sin actividad"} ·{" "}
                   {formatInt(s.flow_count)} flujos
                 </span>
               </div>

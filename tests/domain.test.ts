@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { deriveAlertState, hasActiveQuarantine, parseThreshold } from "@/lib/domain"
+import {
+  HEARTBEAT_TIMEOUT_MS,
+  deriveAlertState,
+  hasActiveQuarantine,
+  latestSensorActivity,
+  parseThreshold,
+  sensorStatus,
+} from "@/lib/domain"
 import type { AdminQuarantineView, AlertView, MitigationEvent } from "@/lib/api/schemas"
 
 const T0 = "2026-10-19T17:10:32.000Z"
@@ -89,5 +96,58 @@ describe("parseThreshold", () => {
 
   it("rechaza cero, negativos y texto", () => {
     for (const bad of ["0", "-1", "abc", "1,2,3", "NaN"]) expect(parseThreshold(bad), bad).toBeUndefined()
+  })
+})
+
+describe("sensorStatus", () => {
+  const NOW = Date.parse("2026-10-23T17:00:00Z")
+  const ago = (ms: number) => new Date(NOW - ms).toISOString()
+  const sensor = (over: Partial<Parameters<typeof sensorStatus>[0]> = {}) => ({
+    is_active: true,
+    last_heartbeat_at: null as string | null,
+    last_ingest_at: null as string | null,
+    last_link_degraded: false,
+    ...over,
+  })
+
+  it("usa la fecha más reciente entre latido e ingest", () => {
+    expect(latestSensorActivity({ last_heartbeat_at: ago(500_000), last_ingest_at: ago(10_000) })).toBe(ago(10_000))
+    expect(latestSensorActivity({ last_heartbeat_at: ago(10_000), last_ingest_at: ago(500_000) })).toBe(ago(10_000))
+    expect(latestSensorActivity({ last_heartbeat_at: null, last_ingest_at: null })).toBeNull()
+  })
+
+  it("ingest reciente con heartbeat viejo → en línea", () => {
+    const s = sensor({ last_heartbeat_at: ago(HEARTBEAT_TIMEOUT_MS * 10), last_ingest_at: ago(5_000) })
+    expect(sensorStatus(s, NOW)).toBe("online")
+  })
+
+  it("heartbeat reciente sin ingest → en línea", () => {
+    expect(sensorStatus(sensor({ last_heartbeat_at: ago(5_000) }), NOW)).toBe("online")
+  })
+
+  it("solo ingest (sensor Edge, sin heartbeat) → en línea", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(5_000) }), NOW)).toBe("online")
+  })
+
+  it("sin ninguna fecha → sin conexión", () => {
+    expect(sensorStatus(sensor(), NOW)).toBe("offline")
+  })
+
+  it("ambas fechas vencidas → sin conexión", () => {
+    const s = sensor({ last_heartbeat_at: ago(HEARTBEAT_TIMEOUT_MS + 1), last_ingest_at: ago(HEARTBEAT_TIMEOUT_MS + 5_000) })
+    expect(sensorStatus(s, NOW)).toBe("offline")
+  })
+
+  it("justo en el límite sigue en línea", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(HEARTBEAT_TIMEOUT_MS) }), NOW)).toBe("online")
+  })
+
+  it("sensor inactivo → sin conexión aunque tenga actividad reciente", () => {
+    expect(sensorStatus(sensor({ is_active: false, last_ingest_at: ago(1_000) }), NOW)).toBe("offline")
+  })
+
+  it("enlace degradado prevalece sobre en línea, no sobre sin conexión", () => {
+    expect(sensorStatus(sensor({ last_ingest_at: ago(1_000), last_link_degraded: true }), NOW)).toBe("link_degraded")
+    expect(sensorStatus(sensor({ last_link_degraded: true }), NOW)).toBe("offline")
   })
 })
