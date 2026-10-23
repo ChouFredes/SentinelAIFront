@@ -32,6 +32,7 @@ El front las dibuja **deshabilitadas con badge "pendiente"** (`components/pendin
 - **Descripción por CIDR** en el inventario (wf3, wf5): `known_devices` es `string[]` sin metadatos.
 - **Nombre y estado de dispositivo** Nuevo / Aprobado / Sospechoso (wf5): no existe entidad "dispositivo".
 - **Suspender respuesta activa si el enlace está degradado** (wf3): el backend lo hace siempre; no hay flag configurable.
+- **Volumen transmitido por hora** (wf4): solo existe `flow_count` total en la telemetría del sensor.
 - **Duración de la cuarentena** (wf3): fija en 60 s, solo lectura.
 - **"Guardar versión"** (wf3): no hay versionado de configuración; se guarda con `PUT /sites/{id}/config`.
 - **Destinatarios de notificaciones por severidad** (RF-08, wf3): sin definir en el backend.
