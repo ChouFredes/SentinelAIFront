@@ -23,12 +23,13 @@ import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSe
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
   MITIGATION_REASON_LABEL,
-  QUARANTINE_MATCH_WINDOW_MS,
   QUARANTINE_SECONDS,
   TAU,
   alertReason,
   deriveAlertState,
   findActiveQuarantine,
+  findCoveringApply,
+  findOwnApply,
   mitigationActor,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
@@ -42,7 +43,6 @@ interface HistoryRow {
 }
 
 function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[] {
-  const t = Date.parse(alert.occurred_at)
   const rows: HistoryRow[] = [
     {
       key: "alert",
@@ -52,10 +52,31 @@ function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[]
       reason: alertReason(alert),
     },
   ]
-  const apply = events.find(
-    (e) => e.event_type === "APPLY" && Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
-  )
+  const apply = findOwnApply(alert, events)
   if (!apply) {
+    const prior = alert.mitigation_applied ? findCoveringApply(alert, events) : undefined
+    if (prior) {
+      // Repetición dentro de una cuarentena: el backend no aplica una regla nueva.
+      rows.push({
+        key: "prior",
+        at: alert.occurred_at,
+        event: `Sin APPLY nuevo: la IP ya estaba en cuarentena (APPLY #${prior.id})`,
+        actor: "Motor",
+        reason: "la regla de iptables ya existía",
+      })
+      for (const e of events
+        .filter((x) => x.original_event_id === prior.id)
+        .sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at))) {
+        rows.push({
+          key: `e${e.id}`,
+          at: e.occurred_at,
+          event: `${e.event_type} (referencia al APPLY #${prior.id})`,
+          actor: mitigationActor(e),
+          reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+        })
+      }
+      return rows
+    }
     if (alert.anomaly && alert.informative_only_mode) {
       rows.push({ key: "none", at: alert.occurred_at, event: "Sin acción de red", actor: "Motor", reason: "modo informativo" })
     } else if (alert.anomaly && alert.link_degraded) {
@@ -205,6 +226,11 @@ export function AlertDetail({ alertId }: { alertId: number }) {
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     Estado: <AlertStateBadge state={state} />
                   </div>
+                  {state === "blocked_prior_quarantine" && (
+                    <p className="text-sm text-muted-foreground">
+                      Esta alerta no generó una regla nueva: la IP ya estaba en cuarentena por una alerta anterior.
+                    </p>
+                  )}
                   {quarantine && (
                     <div className="flex flex-col gap-3">
                       <p className="text-sm">

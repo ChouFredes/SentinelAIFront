@@ -23,7 +23,15 @@ import {
   mockUpdateSiteConfig,
   resetMockStore,
 } from "@/lib/api/mocks/store"
-import { QUARANTINE_MATCH_WINDOW_MS as WINDOW, criticalThreshold, effectiveThreshold } from "@/lib/domain"
+import {
+  QUARANTINE_MATCH_WINDOW_MS as WINDOW,
+  criticalThreshold,
+  deriveAlertState,
+  effectiveThreshold,
+  findCoveringApply,
+  findOwnApply,
+  hasActiveQuarantine,
+} from "@/lib/domain"
 import { isPrivateIp, isQuarantinable } from "@/lib/cidr"
 import { BackendError } from "@/lib/server/errors"
 import { computeSummary } from "@/lib/server/summary"
@@ -61,16 +69,68 @@ describe("mocks cumplen los esquemas", () => {
     }
   })
 
-  it("cada alerta mitigada tiene su APPLY a ±2 s y viceversa", () => {
+  it("cada APPLY tiene exactamente una alerta mitigada propia a ±2 s", () => {
     const alerts = mockAlerts()
     const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
-    const near = (e: { site_id: number; source_ip: string; occurred_at: string }, a: { site_id: number; source_ip: string; occurred_at: string }) =>
-      e.site_id === a.site_id && e.source_ip === a.source_ip && Math.abs(Date.parse(e.occurred_at) - Date.parse(a.occurred_at)) <= WINDOW
-    for (const a of alerts.filter((x) => x.mitigation_applied)) {
-      expect(applies.filter((e) => near(e, a))).toHaveLength(1)
-    }
     for (const e of applies) {
-      expect(alerts.filter((a) => a.mitigation_applied && near(e, a))).toHaveLength(1)
+      const own = alerts.filter((a) => a.mitigation_applied && a.site_id === e.site_id && a.source_ip === e.source_ip && Math.abs(Date.parse(a.occurred_at) - Date.parse(e.occurred_at)) <= WINDOW)
+      expect(own, `APPLY #${e.id}`).toHaveLength(1)
+    }
+  })
+
+  it("una alerta mitigada tiene su APPLY propio o cae dentro de una cuarentena previa", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    for (const a of mockAlerts().filter((x) => x.mitigation_applied)) {
+      const own = findOwnApply(a, events)
+      const covering = findCoveringApply(a, events)
+      expect(own !== undefined || covering !== undefined, `alerta #${a.id}`).toBe(true)
+      if (own) expect(covering === undefined || covering.id === own.id || Date.parse(covering.occurred_at) < Date.parse(own.occurred_at)).toBe(true)
+    }
+  })
+
+  it("hay alertas repetidas: mitigation_applied=true sin APPLY nuevo, dentro de una cuarentena previa", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const repeated = mockAlerts().filter((a) => a.mitigation_applied && findOwnApply(a, events) === undefined)
+    expect(repeated.length).toBeGreaterThan(0)
+    for (const a of repeated) {
+      const prior = findCoveringApply(a, events)!
+      expect(prior, `alerta #${a.id}`).toBeDefined()
+      expect(prior.site_id).toBe(a.site_id)
+      expect(prior.source_ip).toBe(a.source_ip)
+      expect(Date.parse(prior.occurred_at)).toBeLessThanOrEqual(Date.parse(a.occurred_at))
+      const reversion = events.find((e) => e.original_event_id === prior.id)
+      if (reversion) expect(Date.parse(a.occurred_at)).toBeLessThan(Date.parse(reversion.occurred_at))
+      // la repetición no generó ningún evento propio
+      expect(events.some((e) => e.site_id === a.site_id && e.source_ip === a.source_ip && e.occurred_at === a.occurred_at)).toBe(false)
+    }
+  })
+
+  it("una repetición de una cuarentena activa se muestra como bloqueada y sin botón Revertir", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const quarantines = mockQuarantines()
+    const repeated = mockAlerts().filter((a) => a.mitigation_applied && findOwnApply(a, events) === undefined)
+    const inActive = repeated.filter((a) => quarantines.some((q) => q.site_id === a.site_id && q.source_ip === a.source_ip))
+    expect(inActive.length).toBeGreaterThan(0)
+    for (const a of inActive) {
+      expect(hasActiveQuarantine(a, quarantines)).toBe(false)
+      expect(deriveAlertState(a, quarantines, events)).toBe("blocked_prior_quarantine")
+    }
+    // y la alerta que originó cada cuarentena sigue siendo la única con botón
+    for (const q of quarantines) {
+      const withButton = mockAlerts().filter((a) => hasActiveQuarantine(a, [q]))
+      expect(withButton).toHaveLength(1)
+    }
+  })
+
+  it("nunca hay dos APPLY solapados para la misma IP y sitio", () => {
+    const events = mockMitigationEvents({ limit: 1000 })
+    const applies = events.filter((e) => e.event_type === "APPLY").sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
+    for (const [i, e] of applies.entries()) {
+      const next = applies.slice(i + 1).find((x) => x.site_id === e.site_id && x.source_ip === e.source_ip)
+      if (!next) continue
+      const reversion = events.find((r) => r.original_event_id === e.id)
+      expect(reversion, `APPLY #${e.id} sin reversión pero hay otro posterior`).toBeDefined()
+      expect(Date.parse(reversion!.occurred_at)).toBeLessThanOrEqual(Date.parse(next.occurred_at))
     }
   })
 

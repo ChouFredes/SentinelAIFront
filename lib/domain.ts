@@ -46,6 +46,7 @@ export type AlertState =
   | "quarantine_active"
   | "reverted_manual"
   | "reverted_timer"
+  | "blocked_prior_quarantine"
   | "suspended_link"
   | "informative"
   | "detected"
@@ -54,6 +55,7 @@ export const ALERT_STATE_LABEL: Record<AlertState, string> = {
   quarantine_active: "Cuarentena activa",
   reverted_manual: "Revertida (manual)",
   reverted_timer: "Revertida (vencimiento)",
+  blocked_prior_quarantine: "Bloqueada (cuarentena previa)",
   suspended_link: "Suspendida: enlace degradado",
   informative: "Informativa",
   detected: "Detectada",
@@ -75,21 +77,45 @@ export function deriveAlertState(
   if (alert.anomaly && alert.informative_only_mode) return "informative"
   if (alert.anomaly && alert.link_degraded && !alert.mitigation_applied) return "suspended_link"
   if (alert.mitigation_applied) {
-    const t = Date.parse(alert.occurred_at)
-    const apply = events.find(
-      (e) =>
-        e.event_type === "APPLY" &&
-        e.site_id === alert.site_id &&
-        e.source_ip === alert.source_ip &&
-        Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
-    )
-    if (apply) {
-      const reversion = events.find((e) => e.original_event_id === apply.id)
+    const own = findOwnApply(alert, events)
+    if (own) {
+      const reversion = events.find((e) => e.original_event_id === own.id)
       if (reversion?.event_type === "MANUAL_REVERSION") return "reverted_manual"
       if (reversion) return "reverted_timer"
+    } else if (findCoveringApply(alert, events)) {
+      // El backend deja mitigation_applied=true sin APPLY nuevo cuando la regla ya existía.
+      return "blocked_prior_quarantine"
     }
   }
   return "detected"
+}
+
+type AlertKey = Pick<AlertView, "site_id" | "source_ip" | "occurred_at">
+
+/** El APPLY que disparó esta alerta: mismo sitio e IP, registrado dentro de la ventana de ±2 s. */
+export function findOwnApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
+  const t = Date.parse(alert.occurred_at)
+  return events.find(
+    (e) =>
+      e.event_type === "APPLY" &&
+      e.site_id === alert.site_id &&
+      e.source_ip === alert.source_ip &&
+      Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
+  )
+}
+
+/**
+ * Un APPLY anterior de la misma IP y sitio cuya cuarentena seguía en pie cuando
+ * ocurrió la alerta: aplicado antes (o a la vez) y sin reversión todavía.
+ */
+export function findCoveringApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
+  const t = Date.parse(alert.occurred_at)
+  return events.find((apply) => {
+    if (apply.event_type !== "APPLY" || apply.site_id !== alert.site_id || apply.source_ip !== alert.source_ip) return false
+    if (Date.parse(apply.occurred_at) > t) return false
+    const reversion = events.find((e) => e.original_event_id === apply.id)
+    return !reversion || t < Date.parse(reversion.occurred_at)
+  })
 }
 
 /**

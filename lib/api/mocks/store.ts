@@ -146,6 +146,8 @@ interface NewAlert {
   source: string
   mse?: number
   forceMitigation?: boolean
+  /** Alerta repetida de una IP en cuarentena: siempre anomalía. */
+  forceAnomaly?: boolean
 }
 
 function createAlert(st: Store, a: NewAlert): AlertView {
@@ -158,7 +160,7 @@ function createAlert(st: Store, a: NewAlert): AlertView {
   const isPrivate = isPrivateIp(a.source)
   const unrecognized = isPrivate && !ipInCidrs(a.source, cfg.known_devices)
   const linkDegraded = !a.forceMitigation && sensor.degraded && st.rng() < 0.35
-  const mse = a.mse ?? randomMse(st.rng, custom, unrecognized || linkDegraded)
+  const mse = a.mse ?? randomMse(st.rng, custom, !a.forceAnomaly && (unrecognized || linkDegraded))
   const anomaly = mse > effectiveThreshold(custom)
   const severity = severityOf(mse, custom)
   // Respuesta activa como en /ingest: solo ante anomalía, con respuesta habilitada y sin
@@ -190,16 +192,28 @@ function createAlert(st: Store, a: NewAlert): AlertView {
   return alert
 }
 
+/** Cuándo termina la cuarentena que abrió este APPLY (su reversión o su vencimiento). */
+function quarantineEnd(st: Store, apply: MitigationEvent): number {
+  const reversion = st.events.find((e) => e.original_event_id === apply.id)
+  if (reversion) return Date.parse(reversion.occurred_at)
+  const active = st.quarantines.find((q) => q.apply_event_id === apply.id)
+  return active ? Date.parse(active.expires_at) : -Infinity
+}
+
 function applyMitigation(st: Store, alert: AlertView, now: number): void {
-  const applyAt = Date.parse(alert.occurred_at) + 1000
-  // La IP ya está en cuarentena en este sitio: no se aplica una segunda regla.
-  const alreadyQuarantined = st.quarantines.some(
-    (q) => q.site_id === alert.site_id && q.source_ip === alert.source_ip && Date.parse(q.expires_at) > applyAt,
+  const t = Date.parse(alert.occurred_at)
+  // La IP ya estaba en cuarentena en este sitio: como en /ingest, la regla existe, la alerta
+  // queda con mitigation_applied=true y no se registra un APPLY nuevo.
+  const covering = st.events.find(
+    (e) =>
+      e.event_type === "APPLY" &&
+      e.site_id === alert.site_id &&
+      e.source_ip === alert.source_ip &&
+      Date.parse(e.occurred_at) <= t &&
+      quarantineEnd(st, e) > t,
   )
-  if (alreadyQuarantined) {
-    alert.mitigation_applied = false
-    return
-  }
+  if (covering) return
+  const applyAt = t + 1000
   const apply: MitigationEvent = {
     id: st.nextEventId++,
     site_id: alert.site_id,
@@ -240,7 +254,7 @@ function applyMitigation(st: Store, alert: AlertView, now: number): void {
   })
 }
 
-function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
+function spawnDetection(st: Store, now: number, secondsAgo = 0): AlertView {
   const siteId = pick(st.rng, [1, 3])
   // Siempre por encima del umbral crítico del sitio.
   const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
@@ -256,6 +270,7 @@ function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   })
   if (alert.mitigation_applied) applyMitigation(st, alert, now)
   st.lastSpawnAt = now
+  return alert
 }
 
 function build(now: number): Store {
@@ -269,22 +284,51 @@ function build(now: number): Store {
     lastSpawnAt: now,
     rng: makeRng(20261019),
   }
+  // Alertas repetidas de una IP ya en cuarentena: se intercalan en orden cronológico.
+  const pending: { at: number; siteId: number; source: string }[] = []
+  const record = (siteId: number, at: number, source: string, repeated: boolean) => {
+    const alert = createAlert(st, { siteId, at, source, forceAnomaly: repeated })
+    if (!alert.mitigation_applied) return
+    const events = st.events.length
+    applyMitigation(st, alert, now)
+    if (!repeated && st.events.length > events && st.rng() < 0.3) {
+      pending.push({ at: at + 5_000 + st.rng() * 30_000, siteId, source })
+    }
+  }
+  const flush = (until: number) => {
+    pending.sort((a, b) => a.at - b.at)
+    while (pending.length > 0 && pending[0].at <= until) {
+      const p = pending.shift()!
+      record(p.siteId, p.at, p.source, true)
+    }
+  }
+
   const times = Array.from({ length: 120 }, () => now - 90_000 - st.rng() * 7 * DAY).sort((a, b) => a - b)
   for (const at of times) {
+    flush(at)
     const siteId = pick(st.rng, [1, 1, 2, 3, 3])
-    const cfg = st.configs.get(siteId)!
     const roll = st.rng()
     let source: string
     if (roll < 0.68) source = pick(st.rng, PUBLIC_SOURCES)
     else if (roll < 0.82) source = `192.168.${siteId}.${pick(st.rng, [3, 14, 22, 30])}`
     else source = `192.168.${siteId}.${pick(st.rng, [41, 66, 87, 150])}`
-    void cfg
-    const alert = createAlert(st, { siteId, at, source })
-    if (alert.mitigation_applied) applyMitigation(st, alert, now)
+    record(siteId, at, source, false)
   }
-  // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva.
-  spawnDetection(st, now, 12)
+  flush(Infinity)
+  // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva, y una
+  // repetición de la primera mientras sigue en cuarentena (estado "Bloqueada (cuarentena previa)").
+  const first = spawnDetection(st, now, 12)
   spawnDetection(st, now, 30)
+  if (first.mitigation_applied) {
+    const repeated = createAlert(st, {
+      siteId: first.site_id,
+      at: now - 5_000,
+      source: first.source_ip,
+      mse: first.mse_score * 0.8,
+      forceMitigation: true,
+    })
+    if (repeated.mitigation_applied) applyMitigation(st, repeated, now)
+  }
   return st
 }
 
