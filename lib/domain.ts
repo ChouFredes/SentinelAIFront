@@ -144,3 +144,11 @@ export function sensorStatus(
   if (now - Date.parse(s.last_heartbeat_at) > HEARTBEAT_TIMEOUT_MS) return "offline"
   return s.last_link_degraded ? "link_degraded" : "online"
 }
+
+/** "0,0004" o "0.0004" → número; "" → null (usa τ global); inválido o ≤ 0 → undefined. */
+export function parseThreshold(raw: string): number | null | undefined {
+  const t = raw.trim().replace(",", ".")
+  if (t === "") return null
+  const n = Number(t)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}

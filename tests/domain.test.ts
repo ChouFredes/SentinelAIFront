@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { deriveAlertState, hasActiveQuarantine } from "@/lib/domain"
+import { deriveAlertState, hasActiveQuarantine, parseThreshold } from "@/lib/domain"
 import type { AdminQuarantineView, AlertView, MitigationEvent } from "@/lib/api/schemas"
 
 const T0 = "2026-10-19T17:10:32.000Z"
@@ -77,5 +77,17 @@ describe("deriveAlertState", () => {
 
   it("detectada sin más", () => {
     expect(deriveAlertState(alert({ mitigation_applied: false }), [], [])).toBe("detected")
+  })
+})
+
+describe("parseThreshold", () => {
+  it("acepta coma o punto, vacío = τ global", () => {
+    expect(parseThreshold("0,0004")).toBe(0.0004)
+    expect(parseThreshold("0.0004")).toBe(0.0004)
+    expect(parseThreshold("  ")).toBeNull()
+  })
+
+  it("rechaza cero, negativos y texto", () => {
+    for (const bad of ["0", "-1", "abc", "1,2,3", "NaN"]) expect(parseThreshold(bad), bad).toBeUndefined()
   })
 })
