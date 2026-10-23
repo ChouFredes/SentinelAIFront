@@ -23,7 +23,7 @@ import {
   mockUpdateSiteConfig,
   resetMockStore,
 } from "@/lib/api/mocks/store"
-import { QUARANTINE_MATCH_WINDOW_MS as WINDOW } from "@/lib/domain"
+import { QUARANTINE_MATCH_WINDOW_MS as WINDOW, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import { computeSummary } from "@/lib/server/summary"
 
@@ -91,6 +91,19 @@ describe("mocks cumplen los esquemas", () => {
   it("nunca hay dos cuarentenas activas para el mismo sitio e IP", () => {
     const keys = mockQuarantines().map((q) => `${q.site_id}|${q.source_ip}`)
     expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it("la severidad de cada alerta sale de su MSE y del umbral de su sitio", () => {
+    const customBySite = new Map(mockSites().map((s) => [s.id, s.config.custom_mse_threshold]))
+    for (const a of mockAlerts()) {
+      const custom = customBySite.get(a.site_id) ?? null
+      const crit = criticalThreshold(custom)
+      expect(a.mse_score).toBeGreaterThanOrEqual(effectiveThreshold(custom))
+      if (a.severity === "critical") expect(a.mse_score).toBeGreaterThanOrEqual(crit)
+      else expect(a.mse_score).toBeLessThan(crit)
+      if (a.severity === "high") expect(a.mse_score).toBeGreaterThanOrEqual(2 * effectiveThreshold(custom))
+      if (a.severity === "warning") expect(a.mse_score).toBeLessThan(2 * effectiveThreshold(custom))
+    }
   })
 
   it("cada reversión referencia un APPLY existente", () => {

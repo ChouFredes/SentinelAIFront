@@ -22,8 +22,12 @@ export function effectiveThreshold(customMseThreshold: number | null | undefined
   return customMseThreshold ?? TAU
 }
 
-export function criticalThreshold(tau: number): number {
-  return CRITICAL_FACTOR * tau
+/**
+ * Umbral desde el que una alerta es critical, como en el backend:
+ * max(3·τ global, 3·umbral del sitio). Con umbral propio por debajo de τ manda 3τ.
+ */
+export function criticalThreshold(customMseThreshold: number | null | undefined): number {
+  return Math.max(CRITICAL_FACTOR * TAU, CRITICAL_FACTOR * effectiveThreshold(customMseThreshold))
 }
 
 export const SEVERITY_LABEL: Record<Severity, string> = {

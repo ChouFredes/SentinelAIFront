@@ -1,12 +1,14 @@
 import { cn } from "@/lib/utils"
-import { CRITICAL_FACTOR, TAU } from "@/lib/domain"
+import { TAU, criticalThreshold } from "@/lib/domain"
 import { formatMse, formatTau } from "@/lib/format"
 
 const DOMAIN_FACTOR = 5
 
 /**
- * Barra fina con el MSE de un flujo relativo al umbral τ del sitio. La escala
- * llega hasta 5τ y satura: τ y 3τ (desde donde puede ser critical) van marcados.
+ * Barra fina con el MSE de un flujo relativo al umbral del sitio. La escala
+ * llega hasta 5 veces el umbral (o 1,5 veces el umbral crítico, si es mayor) y
+ * satura. Van marcados el umbral del sitio y el umbral crítico
+ * (max(3τ, 3·umbral del sitio), desde donde una alerta es critical).
  */
 export function ScoreBar({
   score,
@@ -17,10 +19,11 @@ export function ScoreBar({
   threshold?: number
   className?: string
 }) {
-  const max = threshold * DOMAIN_FACTOR
+  const critical = criticalThreshold(threshold)
+  const max = Math.max(threshold * DOMAIN_FACTOR, critical * 1.5)
   const pct = Math.min((score / max) * 100, 100)
   const tauPct = (threshold / max) * 100
-  const criticalPct = ((threshold * CRITICAL_FACTOR) / max) * 100
+  const criticalPct = (critical / max) * 100
   const above = score >= threshold
 
   return (

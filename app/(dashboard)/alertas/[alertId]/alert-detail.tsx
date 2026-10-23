@@ -48,7 +48,7 @@ function buildHistory(alert: AlertView, events: MitigationEvent[]): HistoryRow[]
       at: alert.occurred_at,
       event: `Alerta registrada (${alert.severity === "critical" ? "crítica" : alert.severity === "high" ? "alta" : "advertencia"})`,
       actor: "Motor",
-      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, piso)" : "MSE ≥ τ del sitio",
+      reason: alert.severity === "critical" ? "MSE ≥ máx(3τ, 3 × umbral del sitio)" : "MSE ≥ umbral del sitio",
     },
   ]
   const apply = events.find(
@@ -175,7 +175,7 @@ export function AlertDetail({ alertId }: { alertId: number }) {
                     <ScoreBar score={alert.mse_score} threshold={threshold} />
                     <p className="text-xs text-muted-foreground">
                       El MSE es {(alert.mse_score / threshold).toLocaleString("es-AR", { maximumFractionDigits: 1 })} veces el
-                      umbral{config.data?.custom_mse_threshold != null ? " propio del sitio" : " global (τ)"}. Las marcas indican τ y 3τ.
+                      umbral{config.data?.custom_mse_threshold != null ? " propio del sitio" : " global (τ)"}. Las marcas indican el umbral del sitio y el umbral crítico (3 × el mayor entre τ global y el umbral del sitio).
                     </p>
                   </div>
                   <PendingFeature

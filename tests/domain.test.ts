@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import {
   HEARTBEAT_TIMEOUT_MS,
   QUARANTINE_MATCH_WINDOW_MS,
+  TAU,
+  criticalThreshold,
   deriveAlertState,
   findActiveQuarantine,
   hasActiveQuarantine,
@@ -193,5 +195,24 @@ describe("sensorStatus", () => {
   it("enlace degradado prevalece sobre en línea, no sobre sin conexión", () => {
     expect(sensorStatus(sensor({ last_ingest_at: ago(1_000), last_link_degraded: true }), NOW)).toBe("link_degraded")
     expect(sensorStatus(sensor({ last_link_degraded: true }), NOW)).toBe("offline")
+  })
+})
+
+describe("criticalThreshold", () => {
+  it("sin umbral propio es 3τ", () => {
+    expect(criticalThreshold(null)).toBeCloseTo(3 * TAU, 12)
+    expect(criticalThreshold(undefined)).toBeCloseTo(3 * TAU, 12)
+  })
+
+  it("con umbral propio mayor que τ es 3 veces ese umbral", () => {
+    expect(criticalThreshold(0.0004)).toBeCloseTo(0.0012, 12)
+  })
+
+  it("con umbral propio menor que τ manda 3τ", () => {
+    expect(criticalThreshold(0.0001)).toBeCloseTo(3 * TAU, 12)
+  })
+
+  it("con umbral propio igual a τ es 3τ", () => {
+    expect(criticalThreshold(TAU)).toBeCloseTo(3 * TAU, 12)
   })
 })

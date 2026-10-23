@@ -3,7 +3,7 @@
 // SENTINEL_USE_MOCKS=true. PUT config y revert mutan este estado, así que la demo
 // reacciona; en Vercel se reinicia con cada instancia fría.
 import { ipInCidrs, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
-import { QUARANTINE_SECONDS, TAU } from "@/lib/domain"
+import { QUARANTINE_SECONDS, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import type {
   AdminQuarantineView,
@@ -20,8 +20,6 @@ import type {
 } from "@/lib/api/schemas"
 
 const DAY = 86_400_000
-/** Piso de "critical" en los mocks (el backend usa max(3τ, piso)). */
-const CRITICAL_FLOOR = 0.005
 
 const SITES = [
   { id: 1, slug: "deposito-central", name: "Depósito central", is_active: true },
@@ -105,10 +103,23 @@ function initialConfigs(): Map<number, SiteConfigView> {
   ])
 }
 
-function severityOf(mse: number): Severity {
-  if (mse >= CRITICAL_FLOOR) return "critical"
-  if (mse >= 3 * TAU) return "high"
+/**
+ * critical desde criticalThreshold (como el backend). El backend no define el
+ * nivel intermedio: los mocks usan "high" desde 2 veces el umbral del sitio.
+ */
+function severityOf(mse: number, customThreshold: number | null): Severity {
+  if (mse >= criticalThreshold(customThreshold)) return "critical"
+  if (mse >= 2 * effectiveThreshold(customThreshold)) return "high"
   return "warning"
+}
+
+/** MSE de una alerta nueva, por tramos para tener una mezcla creíble de severidades (~45/25/30 %). */
+function randomMse(rng: () => number, customThreshold: number | null): number {
+  const threshold = effectiveThreshold(customThreshold)
+  const roll = rng()
+  if (roll < 0.45) return threshold * (1.05 + rng() * 0.9)
+  if (roll < 0.7) return threshold * (2 + rng() * 0.95)
+  return criticalThreshold(customThreshold) * (1 + Math.pow(rng(), 2) * 15)
 }
 
 function pick<T>(rng: () => number, list: T[]): T {
@@ -130,9 +141,8 @@ interface NewAlert {
 
 function createAlert(st: Store, a: NewAlert): AlertView {
   const cfg = st.configs.get(a.siteId)!
-  const threshold = cfg.custom_mse_threshold ?? TAU
-  const mse = a.mse ?? threshold * (1.05 + Math.pow(st.rng(), 3) * 80)
-  const severity = severityOf(mse)
+  const mse = a.mse ?? randomMse(st.rng, cfg.custom_mse_threshold)
+  const severity = severityOf(mse, cfg.custom_mse_threshold)
   const sensorId = a.forceMitigation
     ? SENSORS.find((s) => s.site_id === a.siteId && !s.degraded)!.sensor_id
     : sensorFor(st.rng, a.siteId)
@@ -218,7 +228,8 @@ function applyMitigation(st: Store, alert: AlertView, now: number): void {
 
 function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   const siteId = pick(st.rng, [1, 3])
-  const mse = 0.004 + st.rng() * 0.02
+  // Siempre por encima del umbral crítico del sitio.
+  const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
   const free = PUBLIC_SOURCES.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
