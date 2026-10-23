@@ -24,6 +24,7 @@ import {
   resetMockStore,
 } from "@/lib/api/mocks/store"
 import { QUARANTINE_MATCH_WINDOW_MS as WINDOW, criticalThreshold, effectiveThreshold } from "@/lib/domain"
+import { isPrivateIp, isQuarantinable } from "@/lib/cidr"
 import { BackendError } from "@/lib/server/errors"
 import { computeSummary } from "@/lib/server/summary"
 
@@ -118,6 +119,19 @@ describe("mocks cumplen los esquemas", () => {
   it("ninguna alerta existe sin anomalía, dispositivo no reconocido ni enlace degradado", () => {
     for (const a of mockAlerts()) {
       expect(a.anomaly || a.unrecognized_device || a.link_degraded, `alerta #${a.id}`).toBe(true)
+    }
+  })
+
+  it("las IP privadas con anomalía también se mitigan, y solo se excluyen las IP protegidas", () => {
+    const mitigated = mockAlerts().filter((a) => a.mitigation_applied)
+    expect(mitigated.some((a) => isPrivateIp(a.source_ip))).toBe(true)
+    expect(mitigated.some((a) => !isPrivateIp(a.source_ip))).toBe(true)
+    expect(mitigated.every((a) => isQuarantinable(a.source_ip))).toBe(true)
+    // Toda anomalía de un sitio con respuesta activa, sin enlace degradado y con IP aislable, se mitiga.
+    const active = new Set(mockSites().filter((s) => s.config.active_response_enabled && !s.config.informative_only_mode).map((s) => s.id))
+    for (const a of mockAlerts()) {
+      const expected = a.anomaly && active.has(a.site_id) && !a.link_degraded && isQuarantinable(a.source_ip)
+      expect(a.mitigation_applied, `alerta #${a.id}`).toBe(expected)
     }
   })
 

@@ -2,7 +2,7 @@
 // (ver docs/backend-pendiente.md) responden siempre desde acá; el resto solo con
 // SENTINEL_USE_MOCKS=true. PUT config y revert mutan este estado, así que la demo
 // reacciona; en Vercel se reinicia con cada instancia fría.
-import { ipInCidrs, isPrivateIp, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
+import { ipInCidrs, isPrivateIp, isQuarantinable, normalizeCidr, MAX_KNOWN_DEVICES } from "@/lib/cidr"
 import { QUARANTINE_SECONDS, criticalThreshold, effectiveThreshold } from "@/lib/domain"
 import { BackendError } from "@/lib/server/errors"
 import type {
@@ -162,9 +162,14 @@ function createAlert(st: Store, a: NewAlert): AlertView {
   const anomaly = mse > effectiveThreshold(custom)
   const severity = severityOf(mse, custom)
   // Respuesta activa como en /ingest: solo ante anomalía, con respuesta habilitada y sin
-  // modo informativo ni enlace degradado. Una advertencia nunca dispara cuarentena.
+  // modo informativo ni enlace degradado. Las IP privadas también se aíslan (solo se
+  // excluyen loopback, multicast, link-local e IPv6). Una advertencia nunca dispara cuarentena.
   const mitigated =
-    anomaly && cfg.active_response_enabled && !cfg.informative_only_mode && !linkDegraded && !isPrivate
+    anomaly &&
+    cfg.active_response_enabled &&
+    !cfg.informative_only_mode &&
+    !linkDegraded &&
+    isQuarantinable(a.source)
   const alert: AlertView = {
     id: st.nextAlertId++,
     site_id: a.siteId,
@@ -239,7 +244,9 @@ function spawnDetection(st: Store, now: number, secondsAgo = 0): void {
   const siteId = pick(st.rng, [1, 3])
   // Siempre por encima del umbral crítico del sitio.
   const mse = criticalThreshold(st.configs.get(siteId)!.custom_mse_threshold) * (4 + st.rng() * 16)
-  const free = PUBLIC_SOURCES.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
+  // Incluye dos hosts internos (uno fuera del inventario): también se aíslan.
+  const candidates = [...PUBLIC_SOURCES, `192.168.${siteId}.41`, `192.168.${siteId}.66`]
+  const free = candidates.filter((ip) => !st.quarantines.some((q) => q.site_id === siteId && q.source_ip === ip))
   const alert = createAlert(st, {
     siteId,
     at: now - secondsAgo * 1000,
