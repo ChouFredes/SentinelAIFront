@@ -53,6 +53,11 @@ function parseIp(s: string): { bytes: number[]; version: 4 | 6 } | null {
   return null
 }
 
+/** ¿Es una IP completa (IPv4 o IPv6)? El backend valida `source_ip` así y responde 422 si no lo es. */
+export function isValidIp(input: string): boolean {
+  return parseIp(input.trim()) !== null
+}
+
 export interface ParsedCidr {
   bytes: number[]
   prefix: number

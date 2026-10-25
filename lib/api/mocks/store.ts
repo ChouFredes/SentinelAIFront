@@ -442,6 +442,7 @@ export function mockTelemetry(sensorId: number, now = Date.now()): SensorTelemet
 }
 
 export function mockSiteSensors(siteId: number): SiteSensorView[] {
+  if (!SITES.some((s) => s.id === siteId)) throw new BackendError(404, "Site not found")
   return SENSORS.filter((s) => s.site_id === siteId).map((s) => ({
     ...mockTelemetry(s.sensor_id),
     name: s.name,

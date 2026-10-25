@@ -231,6 +231,24 @@ describe("mocks cumplen los esquemas", () => {
   })
 })
 
+describe("sensores por sitio", () => {
+  it("un sitio inexistente es 404 'Site not found', como el backend", () => {
+    expect(() => mockSiteSensors(99)).toThrowError(BackendError)
+    try {
+      mockSiteSensors(99)
+    } catch (e) {
+      expect((e as BackendError).status).toBe(404)
+      expect((e as BackendError).detail).toBe("Site not found")
+    }
+  })
+
+  it("el sensor Edge no manda heartbeat: SN-0012 tiene ingest reciente y heartbeat nulo", () => {
+    const sn12 = mockSiteSensors(2).find((s) => s.name === "SN-0012")!
+    expect(sn12.last_heartbeat_at).toBeNull()
+    expect(sn12.last_ingest_at).not.toBeNull()
+  })
+})
+
 describe("revert", () => {
   it("revierte una cuarentena activa y registra MANUAL_REVERSION", () => {
     const q = mockQuarantines()[0]
