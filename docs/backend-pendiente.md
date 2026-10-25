@@ -1,27 +1,36 @@
-# Backend pendiente (lista para Facundo)
+# Backend: integrado y pendiente
 
-El front no modifica el backend: lo que falta se mockea en el BFF (`lib/api/mocks/`) y se registra acá.
-Los esquemas propuestos viven en `lib/api/schemas.ts` (sección "Propuesto"); si el contrato cambia, se actualiza ahí primero.
+El front no modifica el backend (`justicepaladin/SentinelAI`, rama 75). Lo que falta se mockea en el BFF (`lib/api/mocks/`) y se registra acá.
+Los esquemas viven en `lib/api/schemas.ts`; si el contrato cambia, se actualiza ahí primero.
 
-Hasta que cada endpoint exista, `lib/server/backend-support.ts` lo marca en `false` y el BFF responde con el mock **aunque `SENTINEL_USE_MOCKS=false`**. Al implementarse, basta con pasarlo a `true`.
+`lib/server/backend-support.ts` marca qué endpoints existen. Los que están en `false` responden con mock **aunque `SENTINEL_USE_MOCKS=false`**; al implementarse, basta pasarlos a `true`.
 
-## Imprescindibles
+## Ya integrado
 
-| # | Endpoint | Respuesta propuesta | Lo usan |
-|---|---|---|---|
-| 1 | `GET /sites` | `SiteView[]`: `{ id, slug, name, is_active, config: SiteConfigView }` | selector de sitio global, Sitios |
-| 2 | `GET /sites/{site_id}/sensors` | `SiteSensorView[]`: `SensorTelemetryView` + `name` | Resumen, Sitios, Datos transmitidos |
-| 3 | `GET /mitigation-events?site_id=&source_ip=&limit=` | `MitigationEvent[]`, más reciente primero | Detalle de alerta, Auditoría |
-| 4 | `GET /quarantines?site_id=` | `AdminQuarantineView[]`: `QuarantineView` + `site_id` (versión admin de `/dashboard/state`, que solo acepta token de sensor) | Resumen, Alertas (botón Revertir) |
+| Endpoint | Cómo lo usa el panel |
+|---|---|
+| `GET /sites` | selector de sitio global, Sitios, Dispositivos, Resumen |
+| `GET /sites/{id}/sensors` | estado de sensores (Resumen, Sitios, Datos transmitidos) y suma de `flow_count` del resumen |
+| `GET /mitigation-events` | Auditoría e historial del detalle de alerta |
+| `GET /quarantines` | cuarentenas activas, botón Revertir |
+| `GET /alerts/{id}` | detalle de alerta |
+| `GET /alerts` con `since`, `until`, `unrecognized_device`, `before_id`, `limit` | listado, paginación, Dispositivos y resumen |
 
-## Recomendados
+Notas de contrato que el panel respeta:
 
-| # | Endpoint | Respuesta propuesta | Hoy en el BFF |
-|---|---|---|---|
-| 5 | `GET /alerts` con `since`, `until`, `unrecognized_device=true`, `before_id` | `AlertsPage`: `{ items: AlertView[], next_before_id: number \| null }` | Pide `limit=1000` y filtra/pagina en `lib/server/alerts.ts` (se pierde lo que supere las 1000 alertas más recientes) |
-| 6 | `GET /sites/{site_id}/summary?hours=24` | `SiteSummary`: `total_alerts`, `by_severity`, `by_hour[]`, `top_sources[]`, `flows_analyzed` | Se calcula en `lib/server/summary.ts` a partir de `/alerts` y la telemetría |
-| 7 | `GET /sensors/{sensor_id}/flows?limit=20` | `FlowSample[]`: `{ source_ip, destination_ip, destination_port, features }` (RF-06) | Siempre mock |
-| 8 | `GET /alerts/{alert_id}` | `AlertView` | Busca la alerta en `/alerts?limit=1000` |
+- `GET /alerts`: `since` inclusivo, `until` exclusivo (`since < until`, si no 422); las fechas sin offset se toman como UTC. `before_id` devuelve solo ids menores. El backend no informa el total: si vienen exactamente `limit` filas el panel asume que hay más y usa el id de la última como cursor.
+- `source_ip` (en `/alerts` y `/mitigation-events`) tiene que ser una IP completa; con texto parcial el backend responde 422. El BFF lo valida antes de llamar y la interfaz solo manda la IP cuando está completa.
+- `GET /mitigation-events` no pagina (máximo 1000, más reciente primero). `destination_ip`, `destination_port` y `mse_score` pueden ser `null` (reglas importadas) y `reason` es texto libre: los conocidos tienen etiqueta, el resto se muestra tal cual.
+- Los `datetime` se serializan sin zona; el esquema Zod los normaliza a UTC (`lib/iso.ts`).
+- Con el backend real, `GET /mitigation-events` tiene que devolver eventos de todos los sitios para el token admin: una alerta puede estar bloqueada por la cuarentena de otro sitio (la regla de iptables es global).
+
+## Pendiente
+
+| Endpoint | Detalle | Hoy en el BFF |
+|---|---|---|
+| `GET /sensors/{sensor_id}/flows?limit=20` | `FlowSample[]`: `{ source_ip, destination_ip, destination_port, features }` (RF-06) | Siempre mock; en modo real Datos transmitidos envuelve la muestra en "pendiente" |
+| `GET /sites/{site_id}/summary?hours=24` | `SiteSummary`: `total_alerts`, `by_severity`, `by_hour[]`, `top_sources[]`, `flows_analyzed` | Se calcula en `lib/server/summary.ts` con las alertas del período (desde `since`, paginadas por `before_id`, tope de 5000 filas) y la suma de `flow_count` de los sensores |
+| Destinatarios de notificaciones por severidad (RF-08) | Sin definir | Se dibuja deshabilitado |
 
 ## Cosas de los wireframes que el backend no soporta
 
