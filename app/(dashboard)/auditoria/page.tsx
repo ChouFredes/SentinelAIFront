@@ -11,9 +11,10 @@ import { QueryState } from "@/components/query-state"
 import { SimpleSelect } from "@/components/simple-select"
 import { useSite } from "@/components/site-provider"
 import { useMitigationEvents } from "@/lib/api/queries"
+import { isValidIp } from "@/lib/cidr"
 import type { MitigationEventType } from "@/lib/api/schemas"
-import { MITIGATION_REASON_LABEL, mitigationActor } from "@/lib/domain"
-import { formatDateTime, formatMse } from "@/lib/format"
+import { mitigationActor, reasonLabel } from "@/lib/domain"
+import { formatDateTime, formatDestination, formatMseOrDash } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 const PAGE = 100
@@ -29,9 +30,10 @@ export default function AuditoriaPage() {
   const siteId = selected === "all" ? undefined : selected
   const [type, setType] = React.useState<"all" | MitigationEventType>("all")
   const [ip, setIp] = React.useState("")
+  const ipIncomplete = ip.trim() !== "" && !isValidIp(ip)
   const [shown, setShown] = React.useState(PAGE)
 
-  const events = useMitigationEvents({ site_id: siteId, source_ip: ip.trim() || undefined, limit: 1000 })
+  const events = useMitigationEvents({ site_id: siteId, source_ip: isValidIp(ip) ? ip.trim() : undefined, limit: 1000 })
   const siteName = (id: number) => sites.find((s) => s.id === id)?.name ?? `Sitio ${id}`
   const filtered = (events.data ?? []).filter((e) => type === "all" || e.event_type === type)
 
@@ -77,8 +79,14 @@ export default function AuditoriaPage() {
           placeholder="Buscar IP de origen…"
           aria-label="Buscar por IP de origen"
           className="h-7 max-w-56 font-mono"
+          aria-invalid={ipIncomplete || undefined}
         />
       </div>
+      {ipIncomplete && (
+        <p className="-mt-2 text-xs text-muted-foreground" role="status">
+          Ingresá una IP completa (ej. 203.0.113.45) para filtrar por origen.
+        </p>
+      )}
 
       <QueryState query={events} isEmpty={filtered.length === 0} emptyMessage="No hay eventos con esos filtros.">
         <div className="overflow-x-auto rounded-lg border border-border">
@@ -119,13 +127,13 @@ export default function AuditoriaPage() {
                     </Link>
                     <span className="text-muted-foreground">
                       {" → "}
-                      {e.destination_ip}:{e.destination_port}
+                      {formatDestination(e.destination_ip, e.destination_port)}
                     </span>
                   </TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">{formatMse(e.mse_score)}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">{formatMseOrDash(e.mse_score)}</TableCell>
                   <TableCell>{mitigationActor(e)}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {(e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—"}
+                    {reasonLabel(e.reason)}
                   </TableCell>
                 </TableRow>
               ))}

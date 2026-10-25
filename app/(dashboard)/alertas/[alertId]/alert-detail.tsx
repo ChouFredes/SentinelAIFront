@@ -22,7 +22,6 @@ import { ApiError } from "@/lib/api/client"
 import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSensors } from "@/lib/api/queries"
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
-  MITIGATION_REASON_LABEL,
   QUARANTINE_SECONDS,
   TAU,
   alertReason,
@@ -31,8 +30,9 @@ import {
   findCoveringApply,
   findOwnApply,
   mitigationActor,
+  reasonLabel,
 } from "@/lib/domain"
-import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
+import { formatDateTime, formatMse, formatTau, formatTime, parseIso } from "@/lib/format"
 
 interface HistoryRow {
   key: string
@@ -76,13 +76,13 @@ function buildHistory(
       })
       for (const e of events
         .filter((x) => x.original_event_id === prior.id)
-        .sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at))) {
+        .sort((x, y) => parseIso(x.occurred_at).getTime() - parseIso(y.occurred_at).getTime())) {
         rows.push({
           key: `e${e.id}`,
           at: e.occurred_at,
           event: `${e.event_type} (referencia al APPLY #${prior.id})`,
           actor: mitigationActor(e),
-          reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+          reason: reasonLabel(e.reason),
         })
       }
       return rows
@@ -103,13 +103,13 @@ function buildHistory(
   })
   for (const e of events
     .filter((x) => x.original_event_id === apply.id)
-    .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))) {
+    .sort((a, b) => parseIso(a.occurred_at).getTime() - parseIso(b.occurred_at).getTime())) {
     rows.push({
       key: `e${e.id}`,
       at: e.occurred_at,
       event: `${e.event_type} (referencia al APPLY #${apply.id})`,
       actor: mitigationActor(e),
-      reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+      reason: reasonLabel(e.reason),
     })
   }
   return rows

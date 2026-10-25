@@ -99,13 +99,13 @@ type AlertKey = Pick<AlertView, "site_id" | "source_ip" | "occurred_at">
 
 /** El APPLY que disparó esta alerta: mismo sitio e IP, registrado dentro de la ventana de ±2 s. */
 export function findOwnApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
-  const t = Date.parse(alert.occurred_at)
+  const t = parseIso(alert.occurred_at).getTime()
   return events.find(
     (e) =>
       e.event_type === "APPLY" &&
       e.site_id === alert.site_id &&
       e.source_ip === alert.source_ip &&
-      Math.abs(Date.parse(e.occurred_at) - t) <= QUARANTINE_MATCH_WINDOW_MS,
+      Math.abs(parseIso(e.occurred_at).getTime() - t) <= QUARANTINE_MATCH_WINDOW_MS,
   )
 }
 
@@ -117,12 +117,12 @@ export function findOwnApply(alert: AlertKey, events: MitigationEvent[]): Mitiga
  * llamador distingue los casos con `apply.site_id !== alert.site_id`.
  */
 export function findCoveringApply(alert: AlertKey, events: MitigationEvent[]): MitigationEvent | undefined {
-  const t = Date.parse(alert.occurred_at)
+  const t = parseIso(alert.occurred_at).getTime()
   const covers = (apply: MitigationEvent) => {
     if (apply.event_type !== "APPLY" || apply.source_ip !== alert.source_ip) return false
-    if (Date.parse(apply.occurred_at) > t) return false
+    if (parseIso(apply.occurred_at).getTime() > t) return false
     const reversion = events.find((e) => e.original_event_id === apply.id)
-    return !reversion || t < Date.parse(reversion.occurred_at)
+    return !reversion || t < parseIso(reversion.occurred_at).getTime()
   }
   return (
     events.find((e) => e.site_id === alert.site_id && covers(e)) ?? events.find((e) => e.site_id !== alert.site_id && covers(e))
@@ -139,13 +139,13 @@ export function findActiveQuarantine(
   activeQuarantines: AdminQuarantineView[],
   now = Date.now(),
 ): AdminQuarantineView | undefined {
-  const t = Date.parse(alert.occurred_at)
+  const t = parseIso(alert.occurred_at).getTime()
   return activeQuarantines.find(
     (q) =>
       q.site_id === alert.site_id &&
       q.source_ip === alert.source_ip &&
-      Math.abs(Date.parse(q.quarantined_at) - t) <= QUARANTINE_MATCH_WINDOW_MS &&
-      Date.parse(q.expires_at) > now,
+      Math.abs(parseIso(q.quarantined_at).getTime() - t) <= QUARANTINE_MATCH_WINDOW_MS &&
+      parseIso(q.expires_at).getTime() > now,
   )
 }
 
@@ -186,6 +186,12 @@ export const MITIGATION_REASON_LABEL: Record<string, string> = {
   quarantine_timer_elapsed: "vencimiento del plazo",
   administrator_manual_reversion: "reversión manual del administrador",
   legacy_quarantine_import: "importación de cuarentena previa",
+}
+
+/** Etiqueta de un motivo: la conocida, el texto tal cual si no lo es, o "—" si no hay. */
+export function reasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "—"
+  return Object.hasOwn(MITIGATION_REASON_LABEL, reason) ? MITIGATION_REASON_LABEL[reason] : reason
 }
 
 export const MITIGATION_EVENT_LABEL: Record<MitigationEvent["event_type"], string> = {

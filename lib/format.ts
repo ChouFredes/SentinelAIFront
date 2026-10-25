@@ -1,8 +1,10 @@
+import { toUtcIso } from "@/lib/iso"
+
 const TZ = "America/Argentina/Buenos_Aires"
 
 /** Un ISO sin offset (naive de Python) se toma como UTC. */
 export function parseIso(iso: string): Date {
-  return new Date(/(Z|[+-]\d{2}:?\d{2})$/i.test(iso) ? iso : `${iso}Z`)
+  return new Date(toUtcIso(iso))
 }
 
 const dateTime = new Intl.DateTimeFormat("es-AR", {
@@ -54,6 +56,18 @@ export function formatMse(n: number): string {
 /** Umbral τ con 6 decimales: "0,000308". */
 export function formatTau(n: number): string {
   return n.toLocaleString("es-AR", { minimumFractionDigits: 6, maximumFractionDigits: 6 })
+}
+
+/** MSE o "—" cuando el evento no lo trae. */
+export function formatMseOrDash(n: number | null | undefined): string {
+  return n === null || n === undefined ? "—" : formatMse(n)
+}
+
+/** "192.168.1.10:3389", "192.168.1.10", "—:445" o "—" según lo que haya. */
+export function formatDestination(ip: string | null | undefined, port: number | null | undefined): string {
+  const hasPort = port !== null && port !== undefined
+  if (!ip && !hasPort) return "—"
+  return `${ip || "—"}${hasPort ? `:${port}` : ""}`
 }
 
 export function formatInt(n: number): string {

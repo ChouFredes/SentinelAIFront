@@ -1,3 +1,4 @@
+import { parseIso } from "@/lib/format"
 import type { SiteSummary } from "@/lib/api/schemas"
 
 /** Suma los resúmenes de varios sitios (vista "Todos los sitios"). */
@@ -24,7 +25,7 @@ export function mergeSummaries(list: SiteSummary[]): SiteSummary | undefined {
     for (const t of s.top_sources) sources.set(t.source_ip, (sources.get(t.source_ip) ?? 0) + t.count)
   }
   out.by_hour = [...byHour.entries()]
-    .sort(([a], [b]) => Date.parse(a) - Date.parse(b))
+    .sort(([a], [b]) => parseIso(a).getTime() - parseIso(b).getTime())
     .map(([hour, count]) => ({ hour, count }))
   out.top_sources = [...sources.entries()]
     .sort((a, b) => b[1] - a[1])

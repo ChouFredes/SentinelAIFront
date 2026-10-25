@@ -37,7 +37,12 @@ Auth: Bearer. El token admin puede leer todo y es el único que puede escribir. 
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/health` | `HealthResponse`, sin auth |
-| GET | `/alerts` | query: `site_id`, `sensor_id`, `source_ip`, `severity`, `limit` (1–1000, def. 100). Orden: más reciente primero. → `AlertView[]` |
+| GET | `/alerts` | query: `site_id`, `sensor_id`, `source_ip` (IP completa, si no 422), `severity`, `since` (inclusivo), `until` (exclusivo; since < until, si no 422; sin offset = UTC), `unrecognized_device`, `before_id` (solo ids menores, para paginar hacia atrás), `limit` (1–1000, def. 100). Orden: más reciente primero. → `AlertView[]` |
+| GET | `/alerts/{alert_id}` | 404 si no existe → `AlertView` |
+| GET | `/sites` | → `SiteView[]` (id, slug, name, is_active, config) |
+| GET | `/sites/{site_id}/sensors` | 404 si el sitio no existe → `SiteSensorView[]` (telemetría + `name`) |
+| GET | `/mitigation-events` | query: `site_id`, `source_ip` (IP completa), `limit` (1–1000, def. 100). Más reciente primero, sin paginación → `MitigationEvent[]` |
+| GET | `/quarantines` | query: `site_id`. Cuarentenas vivas (versión admin de `/dashboard/state`) → `AdminQuarantineView[]` |
 | GET | `/sensors/{sensor_id}/telemetry` | → `SensorTelemetryView` |
 | GET | `/sites/{site_id}/config` | → `SiteConfigView` |
 | PUT | `/sites/{site_id}/config` | admin. Body parcial `SiteConfigUpdate`. 422 si body vacío o si un bool/lista viene `null` |
@@ -62,28 +67,24 @@ QuarantineView { source_ip, destination_ip: str; destination_port: int; mse_scor
 CriticalAlertView { source_ip, destination_ip: str; destination_port: int; mse_score: float; first_seen, last_seen, expires_at: datetime }
 DashboardState { active_quarantines: QuarantineView[]; critical_alerts: CriticalAlertView[] }
 HealthResponse { status: str; ml_ready, database_ready_at_startup, logging_ready: bool }
-MitigationEvent (tabla, aún sin endpoint) { id, site_id: int; sensor_id: int|null;
+SiteView { id: int; slug, name: str; is_active: bool; config: SiteConfigView }
+SiteSensorView = SensorTelemetryView + { name: str }
+AdminQuarantineView = QuarantineView + { site_id: int }
+MitigationEvent { id, site_id: int; sensor_id: int|null;
   event_type: "APPLY"|"REVERSION"|"MANUAL_REVERSION"; original_event_id: int|null;
-  source_ip, destination_ip: str; destination_port: int; mse_score: float;
-  reason: "quarantine_timer_elapsed"|"administrator_manual_reversion"|"legacy_quarantine_import"|null; occurred_at }
+  source_ip: str; destination_ip: str|null; destination_port: int|null; mse_score: float|null;   # nulos en reglas importadas
+  reason: str|null;   # texto libre; conocidos: quarantine_timer_elapsed, administrator_manual_reversion, legacy_quarantine_import
+  occurred_at }
 ```
 
-Dominio útil para la UI: τ (umbral MSE global) = 0.000308; severidad critical cuando MSE ≥ max(3τ, piso); cuarentena por defecto 60 s; `mitigation_events` es append-only (cada REVERSION apunta a su APPLY por `original_event_id`). Modo informativo = detecta pero no bloquea.
+Dominio útil para la UI: τ (umbral MSE global) = 0.000308; anomalía = MSE > umbral del sitio (o τ); severidad critical cuando MSE ≥ max(3τ, 3 × umbral del sitio), high si es anomalía y warning si no (alerta solo por dispositivo no reconocido o enlace degradado); cuarentena por defecto 60 s; `mitigation_events` es append-only (cada REVERSION apunta a su APPLY por `original_event_id`). Modo informativo = detecta pero no bloquea.
 
 ## Faltante en backend (mockear; lista para Facundo)
 
-Imprescindible:
-1. `GET /sites` → id, slug, name, is_active, resumen de config
-2. `GET /sites/{site_id}/sensors` → sensores con su telemetría
-3. `GET /mitigation-events?site_id=&source_ip=&limit=` → historial de auditoría
-4. `GET /quarantines?site_id=` (versión admin de `/dashboard/state`)
-
-Recomendado:
-5. `/alerts` con `since`, `until`, `unrecognized_device=true` y paginación (`before_id` u `offset`)
-6. `GET /sites/{site_id}/summary?hours=24` → totales, alertas por hora, por severidad, top orígenes
-7. `GET /sensors/{sensor_id}/flows?limit=20` → últimos flujos desde los logs de tráfico (RF-06)
-
-Pendiente de definir: destinatarios de notificaciones (RF-08), no existe en el backend.
+Solo quedan tres cosas (detalle en `docs/backend-pendiente.md`):
+1. `GET /sensors/{sensor_id}/flows?limit=20` → últimos flujos desde los logs de tráfico (RF-06). Hoy la muestra es mock y la pantalla la marca "pendiente" en modo real.
+2. `GET /sites/{site_id}/summary?hours=24` → totales, alertas por hora, por severidad, top orígenes. Hoy el BFF lo calcula desde `/alerts` (con `since` y paginación por `before_id`) y los sensores del sitio.
+3. Destinatarios de notificaciones (RF-08): no existe en el backend.
 
 ## Pantallas (wireframes en `docs/wireframes/`)
 

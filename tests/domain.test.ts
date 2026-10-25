@@ -13,6 +13,7 @@ import {
   hasActiveQuarantine,
   latestSensorActivity,
   parseThreshold,
+  reasonLabel,
   sensorStatus,
 } from "@/lib/domain"
 import type { AdminQuarantineView, AlertView, MitigationEvent } from "@/lib/api/schemas"
@@ -372,5 +373,46 @@ describe("alerta bloqueada por la cuarentena de otro sitio (la regla de iptables
   it("una alerta con APPLY propio no se confunde con una de otro sitio", () => {
     const own = ev({ id: 40, site_id: 1, occurred_at: "2026-10-19T17:10:41.000Z" })
     expect(deriveAlertState(a, [], [otherApply, own, ev({ id: 41, site_id: 1, event_type: "REVERSION", original_event_id: 40, occurred_at: "2026-10-19T17:11:41.000Z" })])).toBe("reverted_timer")
+  })
+})
+
+describe("reasonLabel", () => {
+  it("etiqueta los motivos conocidos", () => {
+    expect(reasonLabel("quarantine_timer_elapsed")).toBe("vencimiento del plazo")
+    expect(reasonLabel("administrator_manual_reversion")).toBe("reversión manual del administrador")
+    expect(reasonLabel("legacy_quarantine_import")).toBe("importación de cuarentena previa")
+  })
+
+  it("muestra el texto tal cual si no lo conoce", () => {
+    expect(reasonLabel("firewall_rule_missing")).toBe("firewall_rule_missing")
+    expect(reasonLabel("Reversión por soporte")).toBe("Reversión por soporte")
+  })
+
+  it("devuelve — sin motivo", () => {
+    expect(reasonLabel(null)).toBe("—")
+    expect(reasonLabel(undefined)).toBe("—")
+    expect(reasonLabel("")).toBe("—")
+  })
+
+  it("no confunde claves del prototipo de Object con motivos", () => {
+    expect(reasonLabel("toString")).toBe("toString")
+  })
+})
+
+describe("eventos con campos nulos", () => {
+  const nullish = (over: Partial<MitigationEvent>) =>
+    ev({ destination_ip: null, destination_port: null, mse_score: null, sensor_id: null, reason: "legacy_quarantine_import", ...over })
+
+  it("deriveAlertState empareja APPLY y reversión aunque falten destino y MSE", () => {
+    const apply = nullish({ id: 10 })
+    const reversion = nullish({ id: 11, event_type: "REVERSION", original_event_id: 10, reason: "quarantine_timer_elapsed", occurred_at: "2026-10-19T17:11:33.000Z" })
+    expect(deriveAlertState(alert(), [], [apply, reversion])).toBe("reverted_timer")
+    expect(deriveAlertState(alert({ occurred_at: "2026-10-19T17:10:40.000Z" }), [], [apply])).toBe("blocked_prior_quarantine")
+  })
+
+  it("una reversión con motivo desconocido sigue siendo una reversión por temporizador", () => {
+    const apply = nullish({ id: 10 })
+    const reversion = nullish({ id: 11, event_type: "REVERSION", original_event_id: 10, reason: "motivo_nuevo", occurred_at: "2026-10-19T17:11:33.000Z" })
+    expect(deriveAlertState(alert(), [], [apply, reversion])).toBe("reverted_timer")
   })
 })

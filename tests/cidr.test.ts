@@ -4,6 +4,7 @@ import {
   ipInCidr,
   ipInCidrs,
   isPrivateIp,
+  isValidIp,
   isQuarantinable,
   isValidCidr,
   normalizeCidr,
@@ -91,5 +92,19 @@ describe("isPrivateIp", () => {
   it("usa las redes internas del backend: RFC1918 y ULA", () => {
     for (const ip of ["10.1.2.3", "172.31.255.1", "192.168.3.41", "fc00::1", "fd12:3456::1"]) expect(isPrivateIp(ip), ip).toBe(true)
     for (const ip of ["8.8.8.8", "172.32.0.1", "127.0.0.1", "169.254.1.1", "2001:db8::1"]) expect(isPrivateIp(ip), ip).toBe(false)
+  })
+})
+
+describe("isValidIp", () => {
+  it("acepta IP completas, IPv4 e IPv6, con espacios alrededor", () => {
+    for (const ip of ["203.0.113.45", "0.0.0.0", "255.255.255.255", "::1", "2001:db8::1", " 192.168.1.1 "]) {
+      expect(isValidIp(ip), ip).toBe(true)
+    }
+  })
+
+  it("rechaza texto a medio escribir y todo lo que el backend rechazaría", () => {
+    for (const ip of ["", "192", "192.168", "192.168.1", "203.0.113.999", "1.2.3.4.5", "abc", "192.168.1.0/24", "01.2.3.4", "2001:db8:::1"]) {
+      expect(isValidIp(ip), ip).toBe(false)
+    }
   })
 })

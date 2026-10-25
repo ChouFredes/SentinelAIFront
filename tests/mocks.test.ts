@@ -71,7 +71,8 @@ describe("mocks cumplen los esquemas", () => {
 
   it("cada APPLY tiene exactamente una alerta mitigada propia a ±2 s", () => {
     const alerts = mockAlerts()
-    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
+    // Las reglas importadas (legacy_quarantine_import) no vienen de una alerta.
+    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY" && e.reason !== "legacy_quarantine_import")
     for (const e of applies) {
       const own = alerts.filter((a) => a.mitigation_applied && a.site_id === e.site_id && a.source_ip === e.source_ip && Math.abs(Date.parse(a.occurred_at) - Date.parse(e.occurred_at)) <= WINDOW)
       expect(own, `APPLY #${e.id}`).toHaveLength(1)
@@ -227,6 +228,24 @@ describe("mocks cumplen los esquemas", () => {
     for (const e of events.filter((e) => e.event_type !== "APPLY")) {
       expect(applies.has(e.original_event_id!)).toBe(true)
     }
+  })
+})
+
+describe("sensores por sitio", () => {
+  it("un sitio inexistente es 404 'Site not found', como el backend", () => {
+    expect(() => mockSiteSensors(99)).toThrowError(BackendError)
+    try {
+      mockSiteSensors(99)
+    } catch (e) {
+      expect((e as BackendError).status).toBe(404)
+      expect((e as BackendError).detail).toBe("Site not found")
+    }
+  })
+
+  it("el sensor Edge no manda heartbeat: SN-0012 tiene ingest reciente y heartbeat nulo", () => {
+    const sn12 = mockSiteSensors(2).find((s) => s.name === "SN-0012")!
+    expect(sn12.last_heartbeat_at).toBeNull()
+    expect(sn12.last_ingest_at).not.toBeNull()
   })
 })
 

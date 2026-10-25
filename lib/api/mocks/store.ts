@@ -316,6 +316,31 @@ function build(now: number): Store {
     record(siteId, at, source, false)
   }
   flush(Infinity)
+  // Una regla importada de antes de que el panel registrara eventos: sin destino ni MSE.
+  const imported: MitigationEvent = {
+    id: st.nextEventId++,
+    site_id: 1,
+    sensor_id: null,
+    event_type: "APPLY",
+    original_event_id: null,
+    source_ip: "198.18.0.7",
+    destination_ip: null,
+    destination_port: null,
+    mse_score: null,
+    reason: "legacy_quarantine_import",
+    occurred_at: iso(now - 6 * DAY),
+  }
+  st.events.push(
+    imported,
+    {
+      ...imported,
+      id: st.nextEventId++,
+      event_type: "REVERSION",
+      original_event_id: imported.id,
+      reason: "quarantine_timer_elapsed",
+      occurred_at: iso(now - 6 * DAY + QUARANTINE_SECONDS * 1000),
+    },
+  )
   // Dos detecciones recientes para que haya cuarentenas con cuenta regresiva, y una
   // repetición de la primera mientras sigue en cuarentena (estado "Bloqueada (cuarentena previa)").
   const first = spawnDetection(st, now, 12)
@@ -417,6 +442,7 @@ export function mockTelemetry(sensorId: number, now = Date.now()): SensorTelemet
 }
 
 export function mockSiteSensors(siteId: number): SiteSensorView[] {
+  if (!SITES.some((s) => s.id === siteId)) throw new BackendError(404, "Site not found")
   return SENSORS.filter((s) => s.site_id === siteId).map((s) => ({
     ...mockTelemetry(s.sensor_id),
     name: s.name,

@@ -26,6 +26,7 @@ import { SimpleSelect } from "@/components/simple-select"
 import { useSite } from "@/components/site-provider"
 import { useAlerts, useMitigationEvents, useQuarantines } from "@/lib/api/queries"
 import { severitySchema, type Severity } from "@/lib/api/schemas"
+import { isValidIp } from "@/lib/cidr"
 import { downloadFile, toCsv } from "@/lib/csv"
 import {
   ALERT_STATE_LABEL,
@@ -100,6 +101,7 @@ export function AlertsView() {
 
   // La IP se escribe en un input local y recién se manda a la URL cuando el usuario deja de tipear.
   const [ipDraft, setIpDraft] = React.useState(ip)
+  const ipIncomplete = ipDraft.trim() !== "" && !isValidIp(ipDraft)
   React.useEffect(() => {
     const id = setTimeout(() => {
       if (ipDraft.trim() !== ip) setParam("ip", ipDraft.trim())
@@ -124,7 +126,8 @@ export function AlertsView() {
   const alerts = useAlerts({
     site_id: siteId,
     severity,
-    source_ip: ip || undefined,
+    // El backend exige una IP completa: un texto a medio escribir no se manda.
+    source_ip: isValidIp(ip) ? ip.trim() : undefined,
     since,
     before_id: cursors[pageIndex],
     limit: PAGE_SIZE,
@@ -232,6 +235,7 @@ export function AlertsView() {
             placeholder="Buscar IP de origen…"
             aria-label="Buscar por IP de origen"
             className="h-7 pl-8 font-mono"
+            aria-invalid={ipIncomplete || undefined}
           />
         </div>
         <Button variant="outline" size="sm" onClick={exportCsv} disabled={rows.length === 0}>
@@ -239,6 +243,12 @@ export function AlertsView() {
           Exportar CSV
         </Button>
       </div>
+
+      {ipIncomplete && (
+        <p className="-mt-2 text-xs text-muted-foreground" role="status">
+          Ingresá una IP completa (ej. 203.0.113.45) para filtrar por origen.
+        </p>
+      )}
 
       <QueryState query={alerts} isEmpty={alerts.data?.items.length === 0} emptyMessage="No hay alertas con esos filtros.">
         <div className="overflow-x-auto rounded-lg border border-border">

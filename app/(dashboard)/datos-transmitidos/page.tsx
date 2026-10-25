@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/page-header"
 import { PendingFeature } from "@/components/pending-feature"
 import { QueryState } from "@/components/query-state"
 import { SimpleSelect } from "@/components/simple-select"
+import { useRuntime } from "@/components/runtime-provider"
 import { useSite } from "@/components/site-provider"
 import { useFlows, useSensorsOfSites } from "@/lib/api/queries"
 import type { FlowSample } from "@/lib/api/schemas"
@@ -29,6 +30,7 @@ function previewLine(flow: FlowSample): string {
 
 export default function DatosTransmitidosPage() {
   const { selected, sites } = useSite()
+  const { flowsPending } = useRuntime()
   const siteIds = React.useMemo(() => (selected === "all" ? sites.map((s) => s.id) : [selected]), [selected, sites])
   const sensorQueries = useSensorsOfSites(siteIds)
   const sensors = sensorQueries.flatMap((q) => q.data ?? [])
@@ -38,6 +40,48 @@ export default function DatosTransmitidosPage() {
   // Si el sensor elegido ya no está en la lista (cambió el sitio), se toma el primero.
   const sensor = sensors.find((s) => s.sensor_id === chosen) ?? sensors[0]
   const flows = useFlows(sensor?.sensor_id, SAMPLE_SIZE)
+
+  const sampleContent = (
+    <QueryState query={flows} isEmpty={flows.data?.length === 0} emptyMessage="El sensor todavía no envió registros.">
+      <pre
+        tabIndex={0}
+        aria-label="Muestra JSON de registros"
+        className="max-h-72 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"
+      >
+        {flows.data?.map(previewLine).join("\n")}
+      </pre>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            downloadFile(
+              `muestra-${sensor?.name ?? "sensor"}.json`,
+              JSON.stringify(flows.data, null, 2),
+              "application/json",
+            )
+          }
+        >
+          <Download data-icon="inline-start" />
+          Descargar muestra JSON
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          Se muestran {SHOWN_FEATURES} características por registro; la descarga trae todas.
+        </span>
+      </div>
+    </QueryState>
+  )
+  // En modo real los flujos todavía no vienen del backend: la muestra es de ejemplo y se muestra deshabilitada.
+  const sample = flowsPending ? (
+    <PendingFeature
+      title="Muestra de los últimos registros"
+      note="El backend todavía no expone los flujos: los registros son de ejemplo."
+    >
+      {sampleContent}
+    </PendingFeature>
+  ) : (
+    sampleContent
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -105,34 +149,7 @@ export default function DatosTransmitidosPage() {
             <CardDescription>Tal como llegan al backend</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <QueryState query={flows} isEmpty={flows.data?.length === 0} emptyMessage="El sensor todavía no envió registros.">
-              <pre
-                tabIndex={0}
-                aria-label="Muestra JSON de registros"
-                className="max-h-72 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"
-              >
-                {flows.data?.map(previewLine).join("\n")}
-              </pre>
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    downloadFile(
-                      `muestra-${sensor?.name ?? "sensor"}.json`,
-                      JSON.stringify(flows.data, null, 2),
-                      "application/json",
-                    )
-                  }
-                >
-                  <Download data-icon="inline-start" />
-                  Descargar muestra JSON
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  Se muestran {SHOWN_FEATURES} características por registro; la descarga trae todas.
-                </span>
-              </div>
-            </QueryState>
+            {sample}
             <PendingFeature
               title="Volumen transmitido (últimas 24 h)"
               note="El backend todavía no expone el volumen por hora; hoy solo informa el total de flujos."
