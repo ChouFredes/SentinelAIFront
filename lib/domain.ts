@@ -188,6 +188,12 @@ export const MITIGATION_REASON_LABEL: Record<string, string> = {
   legacy_quarantine_import: "importación de cuarentena previa",
 }
 
+/** Etiqueta de un motivo: la conocida, el texto tal cual si no lo es, o "—" si no hay. */
+export function reasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "—"
+  return Object.hasOwn(MITIGATION_REASON_LABEL, reason) ? MITIGATION_REASON_LABEL[reason] : reason
+}
+
 export const MITIGATION_EVENT_LABEL: Record<MitigationEvent["event_type"], string> = {
   APPLY: "APPLY: regla aplicada",
   REVERSION: "REVERSION (referencia al APPLY)",

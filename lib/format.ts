@@ -58,6 +58,18 @@ export function formatTau(n: number): string {
   return n.toLocaleString("es-AR", { minimumFractionDigits: 6, maximumFractionDigits: 6 })
 }
 
+/** MSE o "—" cuando el evento no lo trae. */
+export function formatMseOrDash(n: number | null | undefined): string {
+  return n === null || n === undefined ? "—" : formatMse(n)
+}
+
+/** "192.168.1.10:3389", "192.168.1.10", "—:445" o "—" según lo que haya. */
+export function formatDestination(ip: string | null | undefined, port: number | null | undefined): string {
+  const hasPort = port !== null && port !== undefined
+  if (!ip && !hasPort) return "—"
+  return `${ip || "—"}${hasPort ? `:${port}` : ""}`
+}
+
 export function formatInt(n: number): string {
   return n.toLocaleString("es-AR")
 }

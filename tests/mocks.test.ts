@@ -71,7 +71,8 @@ describe("mocks cumplen los esquemas", () => {
 
   it("cada APPLY tiene exactamente una alerta mitigada propia a ±2 s", () => {
     const alerts = mockAlerts()
-    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY")
+    // Las reglas importadas (legacy_quarantine_import) no vienen de una alerta.
+    const applies = mockMitigationEvents({ limit: 1000 }).filter((e) => e.event_type === "APPLY" && e.reason !== "legacy_quarantine_import")
     for (const e of applies) {
       const own = alerts.filter((a) => a.mitigation_applied && a.site_id === e.site_id && a.source_ip === e.source_ip && Math.abs(Date.parse(a.occurred_at) - Date.parse(e.occurred_at)) <= WINDOW)
       expect(own, `APPLY #${e.id}`).toHaveLength(1)

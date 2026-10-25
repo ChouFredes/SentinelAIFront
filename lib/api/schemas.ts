@@ -113,13 +113,6 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>
 export const mitigationEventTypeSchema = z.enum(["APPLY", "REVERSION", "MANUAL_REVERSION"])
 export type MitigationEventType = z.infer<typeof mitigationEventTypeSchema>
 
-export const mitigationReasonSchema = z.enum([
-  "quarantine_timer_elapsed",
-  "administrator_manual_reversion",
-  "legacy_quarantine_import",
-])
-export type MitigationReason = z.infer<typeof mitigationReasonSchema>
-
 export const mitigationEventSchema = z.object({
   id: z.number().int(),
   site_id: z.number().int(),
@@ -127,10 +120,12 @@ export const mitigationEventSchema = z.object({
   event_type: mitigationEventTypeSchema,
   original_event_id: z.number().int().nullable(),
   source_ip: z.string(),
-  destination_ip: z.string(),
-  destination_port: z.number().int(),
-  mse_score: z.number(),
-  reason: mitigationReasonSchema.nullable(),
+  // Los eventos importados de reglas previas pueden no tener destino ni MSE.
+  destination_ip: z.string().nullable(),
+  destination_port: z.number().int().nullable(),
+  mse_score: z.number().nullable(),
+  // Texto libre: los conocidos tienen etiqueta (MITIGATION_REASON_LABEL), el resto se muestra tal cual.
+  reason: z.string().nullable(),
   occurred_at: isoDate,
 })
 export type MitigationEvent = z.infer<typeof mitigationEventSchema>

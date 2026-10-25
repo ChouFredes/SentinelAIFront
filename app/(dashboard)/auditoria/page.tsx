@@ -12,8 +12,8 @@ import { SimpleSelect } from "@/components/simple-select"
 import { useSite } from "@/components/site-provider"
 import { useMitigationEvents } from "@/lib/api/queries"
 import type { MitigationEventType } from "@/lib/api/schemas"
-import { MITIGATION_REASON_LABEL, mitigationActor } from "@/lib/domain"
-import { formatDateTime, formatMse } from "@/lib/format"
+import { mitigationActor, reasonLabel } from "@/lib/domain"
+import { formatDateTime, formatDestination, formatMseOrDash } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 const PAGE = 100
@@ -119,13 +119,13 @@ export default function AuditoriaPage() {
                     </Link>
                     <span className="text-muted-foreground">
                       {" → "}
-                      {e.destination_ip}:{e.destination_port}
+                      {formatDestination(e.destination_ip, e.destination_port)}
                     </span>
                   </TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">{formatMse(e.mse_score)}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">{formatMseOrDash(e.mse_score)}</TableCell>
                   <TableCell>{mitigationActor(e)}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {(e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—"}
+                    {reasonLabel(e.reason)}
                   </TableCell>
                 </TableRow>
               ))}

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { formatCountdown, formatDateTime, formatMse, formatShortDateTime, formatTime } from "@/lib/format"
+import {
+  formatCountdown,
+  formatDateTime,
+  formatDestination,
+  formatMse,
+  formatMseOrDash,
+  formatShortDateTime,
+  formatTime,
+} from "@/lib/format"
 
 describe("format", () => {
   it("muestra fechas en hora de Buenos Aires (UTC-3)", () => {
@@ -24,5 +32,23 @@ describe("format", () => {
     const now = Date.parse("2026-10-19T17:00:00Z")
     expect(formatCountdown("2026-10-19T17:01:05Z", now)).toBe("1:05")
     expect(formatCountdown("2026-10-19T16:59:00Z", now)).toBe("0:00")
+  })
+})
+
+describe("campos que pueden venir nulos", () => {
+  it("formatDestination", () => {
+    expect(formatDestination("192.168.1.10", 3389)).toBe("192.168.1.10:3389")
+    expect(formatDestination("192.168.1.10", null)).toBe("192.168.1.10")
+    expect(formatDestination(null, 445)).toBe("—:445")
+    expect(formatDestination(null, null)).toBe("—")
+    expect(formatDestination(undefined, undefined)).toBe("—")
+    expect(formatDestination("", 0)).toBe("—:0") // el puerto 0 es un valor, no ausencia
+  })
+
+  it("formatMseOrDash", () => {
+    expect(formatMseOrDash(0.0184)).toBe("0,01840")
+    expect(formatMseOrDash(0)).toBe("0,00000")
+    expect(formatMseOrDash(null)).toBe("—")
+    expect(formatMseOrDash(undefined)).toBe("—")
   })
 })

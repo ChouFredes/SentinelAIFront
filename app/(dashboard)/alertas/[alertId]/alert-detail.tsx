@@ -22,7 +22,6 @@ import { ApiError } from "@/lib/api/client"
 import { useAlert, useMitigationEvents, useQuarantines, useSiteConfig, useSiteSensors } from "@/lib/api/queries"
 import type { AlertView, MitigationEvent } from "@/lib/api/schemas"
 import {
-  MITIGATION_REASON_LABEL,
   QUARANTINE_SECONDS,
   TAU,
   alertReason,
@@ -31,6 +30,7 @@ import {
   findCoveringApply,
   findOwnApply,
   mitigationActor,
+  reasonLabel,
 } from "@/lib/domain"
 import { formatDateTime, formatMse, formatTau, formatTime, parseIso } from "@/lib/format"
 
@@ -82,7 +82,7 @@ function buildHistory(
           at: e.occurred_at,
           event: `${e.event_type} (referencia al APPLY #${prior.id})`,
           actor: mitigationActor(e),
-          reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+          reason: reasonLabel(e.reason),
         })
       }
       return rows
@@ -109,7 +109,7 @@ function buildHistory(
       at: e.occurred_at,
       event: `${e.event_type} (referencia al APPLY #${apply.id})`,
       actor: mitigationActor(e),
-      reason: (e.reason && MITIGATION_REASON_LABEL[e.reason]) ?? "—",
+      reason: reasonLabel(e.reason),
     })
   }
   return rows
