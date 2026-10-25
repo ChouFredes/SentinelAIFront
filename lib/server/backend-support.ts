@@ -25,3 +25,12 @@ export type Endpoint = keyof typeof BACKEND_SUPPORT
 export function shouldMock(endpoint: Endpoint): boolean {
   return getEnv().useMocks || !BACKEND_SUPPORT[endpoint]
 }
+
+/**
+ * ¿La muestra de flujos (RF-06) es de ejemplo aunque el resto del panel use el
+ * backend real? Pasa cuando los mocks están apagados y el backend todavía no
+ * expone /sensors/{id}/flows.
+ */
+export function flowsPending(useMocks: boolean, support: { flows: boolean } = BACKEND_SUPPORT): boolean {
+  return !useMocks && !support.flows
+}
