@@ -6,6 +6,7 @@ import { shouldMock } from "@/lib/server/backend-support"
 import { BackendError } from "@/lib/server/errors"
 import { intParam } from "@/lib/server/params"
 import { sentinelFetch } from "@/lib/server/sentinel"
+import { parseIso } from "@/lib/format"
 
 const MAX_LIMIT = 1000
 const DEFAULT_PAGE = 50
@@ -30,7 +31,7 @@ function parseFilters(sp: URLSearchParams): AlertFilters {
   const date = (name: string) => {
     const v = sp.get(name)
     if (!v) return undefined
-    const t = Date.parse(v)
+    const t = parseIso(v).getTime()
     if (Number.isNaN(t)) throw new BackendError(422, `${name} debe ser una fecha ISO 8601`)
     return t
   }
@@ -66,8 +67,8 @@ export async function queryAlerts(sp: URLSearchParams): Promise<AlertsPage> {
   const all = await loadAlerts(f)
   const filtered = all.filter(
     (a) =>
-      (f.since === undefined || Date.parse(a.occurred_at) >= f.since) &&
-      (f.until === undefined || Date.parse(a.occurred_at) <= f.until) &&
+      (f.since === undefined || parseIso(a.occurred_at).getTime() >= f.since) &&
+      (f.until === undefined || parseIso(a.occurred_at).getTime() <= f.until) &&
       (!f.unrecognized_device || a.unrecognized_device) &&
       (f.before_id === undefined || a.id < f.before_id),
   )

@@ -1,4 +1,5 @@
 import type { AlertView, SiteSummary } from "@/lib/api/schemas"
+import { parseIso } from "@/lib/format"
 
 const HOUR = 3_600_000
 
@@ -11,7 +12,7 @@ export function computeSummary(
   now = Date.now(),
 ): SiteSummary {
   const since = now - hours * HOUR
-  const inWindow = alerts.filter((a) => a.site_id === siteId && Date.parse(a.occurred_at) >= since)
+  const inWindow = alerts.filter((a) => a.site_id === siteId && parseIso(a.occurred_at).getTime() >= since)
 
   const by_severity = { warning: 0, high: 0, critical: 0 }
   const sources = new Map<string, number>()
@@ -22,7 +23,7 @@ export function computeSummary(
   for (const a of inWindow) {
     by_severity[a.severity]++
     sources.set(a.source_ip, (sources.get(a.source_ip) ?? 0) + 1)
-    const bucket = Math.floor(Date.parse(a.occurred_at) / HOUR) * HOUR
+    const bucket = Math.floor(parseIso(a.occurred_at).getTime() / HOUR) * HOUR
     if (buckets.has(bucket)) buckets.set(bucket, buckets.get(bucket)! + 1)
   }
 

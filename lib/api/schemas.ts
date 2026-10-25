@@ -2,9 +2,10 @@
 // se actualiza acá primero. Las secciones "Propuesto" son endpoints que todavía
 // no existen: el BFF los resuelve con mocks (ver docs/backend-pendiente.md).
 import { z } from "zod"
+import { toUtcIso } from "@/lib/iso"
 
 /** ISO 8601 UTC. Un datetime sin offset (naive de Python) se interpreta como UTC. */
-export const isoDate = z.iso.datetime({ offset: true, local: true })
+export const isoDate = z.iso.datetime({ offset: true, local: true }).transform(toUtcIso)
 
 export const severitySchema = z.enum(["warning", "high", "critical"])
 export type Severity = z.infer<typeof severitySchema>

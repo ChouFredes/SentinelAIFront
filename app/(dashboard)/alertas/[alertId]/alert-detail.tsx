@@ -32,7 +32,7 @@ import {
   findOwnApply,
   mitigationActor,
 } from "@/lib/domain"
-import { formatDateTime, formatMse, formatTau, formatTime } from "@/lib/format"
+import { formatDateTime, formatMse, formatTau, formatTime, parseIso } from "@/lib/format"
 
 interface HistoryRow {
   key: string
@@ -76,7 +76,7 @@ function buildHistory(
       })
       for (const e of events
         .filter((x) => x.original_event_id === prior.id)
-        .sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at))) {
+        .sort((x, y) => parseIso(x.occurred_at).getTime() - parseIso(y.occurred_at).getTime())) {
         rows.push({
           key: `e${e.id}`,
           at: e.occurred_at,
@@ -103,7 +103,7 @@ function buildHistory(
   })
   for (const e of events
     .filter((x) => x.original_event_id === apply.id)
-    .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))) {
+    .sort((a, b) => parseIso(a.occurred_at).getTime() - parseIso(b.occurred_at).getTime())) {
     rows.push({
       key: `e${e.id}`,
       at: e.occurred_at,

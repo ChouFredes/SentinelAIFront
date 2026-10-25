@@ -28,7 +28,7 @@ import { useAlerts, useUpdateSiteConfig } from "@/lib/api/queries"
 import type { AlertView, Severity, SiteView } from "@/lib/api/schemas"
 import { CIDR_ERROR_MESSAGE, hostCidr, ipInCidrs, validateNewCidr } from "@/lib/cidr"
 import { severityRank } from "@/lib/domain"
-import { formatInt, formatShortDateTime } from "@/lib/format"
+import { formatInt, formatShortDateTime, parseIso } from "@/lib/format"
 
 interface DeviceGroup {
   key: string
@@ -58,11 +58,11 @@ function groupByDevice(alerts: AlertView[]): DeviceGroup[] {
       continue
     }
     g.count++
-    if (Date.parse(a.occurred_at) < Date.parse(g.firstSeen)) g.firstSeen = a.occurred_at
-    if (Date.parse(a.occurred_at) > Date.parse(g.lastSeen)) g.lastSeen = a.occurred_at
+    if (parseIso(a.occurred_at).getTime() < parseIso(g.firstSeen).getTime()) g.firstSeen = a.occurred_at
+    if (parseIso(a.occurred_at).getTime() > parseIso(g.lastSeen).getTime()) g.lastSeen = a.occurred_at
     if (severityRank(a.severity) > severityRank(g.severity)) g.severity = a.severity
   }
-  return [...groups.values()].sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen))
+  return [...groups.values()].sort((a, b) => parseIso(b.lastSeen).getTime() - parseIso(a.lastSeen).getTime())
 }
 
 function AddToInventory({ site, ip }: { site: SiteView; ip: string }) {
