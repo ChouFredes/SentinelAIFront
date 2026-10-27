@@ -59,10 +59,30 @@ describe("GET /api/sensors/{id}/flows", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("un sensor desconocido es 404 y un limit fuera de rango es 422", async () => {
-    await useRealBackend({})
+  it("en modo real la muestra de ejemplo se genera para cualquier sensor real, no solo los simulados", async () => {
+    const { fetchMock } = await useRealBackend({})
+    for (const id of ["1", "2", "5000"]) {
+      const res = await flows(id, "?limit=2")
+      expect(res.status, id).toBe(200)
+      const body = await res.json()
+      expect(body).toHaveLength(2)
+      expect(Object.keys(body[0].features).length).toBeGreaterThan(0)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("con mocks, un sensor que no está en los datos simulados sigue siendo 404", async () => {
+    useMockMode()
     expect((await flows("999")).status).toBe(404)
+    expect((await flows("7")).status).toBe(200)
+  })
+
+  it("un limit fuera de rango es 422 en los dos modos", async () => {
+    await useRealBackend({})
     expect((await flows("7", "?limit=0")).status).toBe(422)
     expect((await flows("7", "?limit=101")).status).toBe(422)
+    restoreEnvironment()
+    useMockMode()
+    expect((await flows("7", "?limit=0")).status).toBe(422)
   })
 })

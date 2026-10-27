@@ -136,7 +136,8 @@ export default function ResumenPage() {
           </QueryState>
         </div>
         <div className="flex flex-col gap-4">
-          <SensorsCard sensors={sensors} siteName={selected === "all" ? siteName : undefined} />
+          {/* flex-1 y no h-full: en una columna con otra tarjeta debajo, h-full la empujaba fuera de la fila y la cortaba. */}
+          <SensorsCard className="flex-1" sensors={sensors} siteName={selected === "all" ? siteName : undefined} />
           <Card>
             <CardHeader>
               <CardTitle>Backend</CardTitle>
