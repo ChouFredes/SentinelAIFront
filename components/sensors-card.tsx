@@ -27,12 +27,14 @@ export function SensorStatusBadge({ sensor }: { sensor: SiteSensorView }) {
 export function SensorsCard({
   sensors,
   siteName,
+  className,
 }: {
   sensors: SiteSensorView[]
   siteName?: (siteId: number) => string | undefined
+  className?: string
 }) {
   return (
-    <Card className="h-full">
+    <Card className={className ?? "h-full"}>
       <CardHeader>
         <CardTitle>Sensores</CardTitle>
         <CardDescription>Latido y estado del enlace</CardDescription>
