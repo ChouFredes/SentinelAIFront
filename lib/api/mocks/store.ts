@@ -517,9 +517,15 @@ export function mockRevert(sourceIp: string, siteId?: number): ManualReversionRe
   return { site_id: q.site_id, source_ip: q.source_ip, reverted: true, rule_was_present: true }
 }
 
-export function mockFlows(sensorId: number, limit = 20): FlowSample[] {
+/**
+ * Muestra de ejemplo de flujos (RF-06). Con mocks solo existen los sensores simulados; con el
+ * backend real (que todavía no expone los flujos) la muestra es de ejemplo para cualquier sensor
+ * real, así que `anySensor` evita el 404 para ids que no están en los datos simulados.
+ */
+export function mockFlows(sensorId: number, limit = 20, anySensor = false): FlowSample[] {
   const sensor = SENSORS.find((s) => s.sensor_id === sensorId)
-  if (!sensor) throw new BackendError(404, "Sensor no encontrado")
+  if (!sensor && !anySensor) throw new BackendError(404, "Sensor no encontrado")
+  const siteId = sensor?.site_id ?? 1
   const rng = makeRng(sensorId * 7919)
   return Array.from({ length: limit }, () => {
     const pkts = 1 + Math.floor(rng() * 40)
@@ -530,8 +536,8 @@ export function mockFlows(sensorId: number, limit = 20): FlowSample[] {
     features["Total Fwd Packets"] = pkts
     features["Total Backward Packets"] = Math.max(1, Math.floor(pkts * (0.4 + rng() * 0.8)))
     return {
-      source_ip: `192.168.${sensor.site_id}.${pick(rng, [3, 10, 14, 22, 33])}`,
-      destination_ip: pick(rng, ["8.8.4.4", "52.96.1.18", "1.1.1.1", "142.250.78.14", `192.168.${sensor.site_id}.1`]),
+      source_ip: `192.168.${siteId}.${pick(rng, [3, 10, 14, 22, 33])}`,
+      destination_ip: pick(rng, ["8.8.4.4", "52.96.1.18", "1.1.1.1", "142.250.78.14", `192.168.${siteId}.1`]),
       destination_port: pick(rng, [53, 443, 80, 123, 8080]),
       features,
     }
